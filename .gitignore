@@ -1,17 +1,38 @@
 # Unity generated folders
-/Library/
-/Temp/
-/Obj/
-/Build/
-/Builds/
-/Logs/
-/UserSettings/
-/MemoryCaptures/
+.utmp/
+/[Ll]ibrary/
+/[Tt]emp/
+/[Oo]bj/
+/[Bb]uild/
+/[Bb]uilds/
+/[Ll]ogs/
+/[Uu]ser[Ss]ettings/
+/[Mm]emoryCaptures/
+/[Rr]ecordings/
+*.log
 
-# Unity generated files
-/Assets/AssetStoreTools*
+# Asset Store and generated editor plugins
+# /[Aa]ssets/AssetStoreTools*
+/[Aa]ssets/Plugins/Editor/JetBrains*
+*.DotSettings.user
+
+# IDE/editor
+.vs/
+.vscode/
+.idea/
+.gradle/
+ExportedObj/
+.consulo/
+*.swp
+*.swo
+
+# Generated solution and project files
 *.csproj
+*.unityproj
 *.sln
+*.slnx
+*.suo
+*.tmp
 *.user
 *.userprefs
 *.pidb
@@ -21,23 +42,47 @@
 *.mdb
 *.opendb
 *.VC.db
-
-# IDE/editor
-.vs/
-.vscode/
-.idea/
-*.swp
-*.swo
+*.pidb.meta
+*.pdb.meta
+*.mdb.meta
 
 # OS files
 .DS_Store
 Thumbs.db
 Desktop.ini
 
-# Crash reports
+# Crash reports and mono generated files
 sysinfo.txt
+mono_crash.*
+crashlytics-build.properties
 
 # Build artifacts
 *.apk
 *.aab
 *.unitypackage
+*.unitypackage.meta
+*.app
+
+# Blender backup files
+*.blend1
+*.blend1.meta
+
+# TestRunner generated files
+InitTestScene*.unity*
+/[Aa]ssets/[Ii]nit[Tt]est[Ss]cene*.unity*
+
+# Addressables generated files
+/ServerData
+/[Aa]ssets/StreamingAssets/aa*
+/[Aa]ssets/AddressableAssetsData/link.xml*
+/[Aa]ssets/Addressables_Temp*
+/[Aa]ssets/AddressableAssetsData/*/*.bin*
+
+# Visual Scripting auto-generated files
+/[Aa]ssets/Unity.VisualScripting.Generated/VisualScripting.Flow/UnitOptions.db
+/[Aa]ssets/Unity.VisualScripting.Generated/VisualScripting.Flow/UnitOptions.db.meta
+/[Aa]ssets/Unity.VisualScripting.Generated/VisualScripting.Core/Property Providers
+/[Aa]ssets/Unity.VisualScripting.Generated/VisualScripting.Core/Property Providers.meta
+
+# Unity generated cache in Assets
+/[Aa]ssets/[Ss]ceneDependencyCache*
