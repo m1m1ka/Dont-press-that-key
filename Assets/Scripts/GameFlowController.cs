@@ -1,0 +1,811 @@
+using System;
+using System.Collections;
+using DG.Tweening;
+using UnityEngine;
+using UnityEngine.Serialization;
+
+[DisallowMultipleComponent]
+public sealed class GameFlowController : MonoBehaviour
+{
+    private enum GameFlowState
+    {
+        NotStarted,
+        InputLocked,
+        AmmoBoxFalling,
+        SpawningBullets,
+        OpeningAmmoBox,
+        Gameplay
+    }
+
+    [Header("Player Input")]
+    [SerializeField] private WASDCameraMovement cameraMovement;
+    [SerializeField] private LimitedCameraLook cameraLook;
+    [SerializeField, FormerlySerializedAs("shotGunInteraction")] private FocusableObject shotGunFocus;
+    [SerializeField] private InteractionUIController interactionUI;
+
+    [Header("Ammo Box")]
+    [SerializeField] private GameObject ammoBoxPrefab;
+    [SerializeField] private Vector3 ammoBoxSpawnPosition;
+    [SerializeField] private Vector3 ammoBoxSpawnRotation;
+    [SerializeField] private Vector3 ammoBoxLandingPosition;
+    [SerializeField] private Vector3 ammoBoxLandingRotation;
+    [SerializeField, Min(0.01f)] private float ammoBoxDropDuration = 0.8f;
+    [SerializeField] private AnimationCurve ammoBoxDropCurve =
+        new AnimationCurve(new Keyframe(0f, 0f), new Keyframe(1f, 1f));
+    [SerializeField] private Transform ammoBoxParent;
+    [SerializeField] private string coverChildName = "Cover";
+
+    [Header("Bullets")]
+    [SerializeField] private BulletSpawner bulletSpawner;
+    [SerializeField, Min(0f)] private float bulletSpawnDelayAfterAmmoBoxSpawn = 1f;
+
+    [Header("Open Animation")]
+    [SerializeField] private Vector3 closedCoverEulerAngles = new Vector3(-90f, 0f, 0f);
+    [SerializeField] private Vector3 openCoverEulerAngles = new Vector3(-210f, 0f, 0f);
+    [SerializeField, Min(0.01f)] private float openDuration = 0.8f;
+    [SerializeField] private AnimationCurve openCurve =
+        new AnimationCurve(new Keyframe(0f, 0f), new Keyframe(1f, 1f));
+
+    [Header("Reload Flow")]
+    [SerializeField, FormerlySerializedAs("revolver")] private Transform shotGun;
+    [SerializeField] private ShotGunState shotGunState;
+    [SerializeField, FormerlySerializedAs("revolverReloadPosition")] private Vector3 shotGunReloadPosition;
+    [SerializeField, FormerlySerializedAs("revolverReloadEulerAngles")] private Vector3 shotGunReloadEulerAngles;
+    [SerializeField, FormerlySerializedAs("revolverReloadScale")] private Vector3 shotGunReloadScale = Vector3.one;
+    [SerializeField] private Vector3 ammoBoxReloadPosition;
+    [SerializeField] private Vector3 ammoBoxReloadEulerAngles;
+    [SerializeField] private Vector3 ammoBoxReloadScale = Vector3.one;
+    [SerializeField, Min(0.01f)] private float reloadCameraMoveDuration = 0.45f;
+    [SerializeField, Min(0.01f), FormerlySerializedAs("reloadRevolverMoveDuration")] private float reloadShotGunMoveDuration = 0.45f;
+    [SerializeField, Min(0.01f)] private float reloadAmmoBoxMoveDuration = 0.45f;
+    [SerializeField, Min(0.01f), FormerlySerializedAs("reloadRevolverReturnDuration")] private float reloadShotGunReturnDuration = 0.45f;
+    [SerializeField] private AnimationCurve reloadTransitionCurve =
+        new AnimationCurve(new Keyframe(0f, 0f), new Keyframe(1f, 1f));
+    [SerializeField, Min(0f)] private float skippedLoadAnimationDelay;
+
+    [Header("Reload Animation")]
+    [SerializeField, FormerlySerializedAs("revolverReloadAnimator")] private ShotGunReloadAnimator shotGunReloadAnimator;
+    [SerializeField, Min(0f)] private float postBoltReturnDelay = 0.2f;
+
+    [Header("Shoot Player Flow")]
+    [SerializeField] private ShotGunShootPlayerAnimator shotGunShootPlayerAnimator;
+    [SerializeField] private Vector3 shotGunShootPlayerCameraPosition;
+    [SerializeField] private Vector3 shotGunShootPlayerCameraEulerAngles;
+    [SerializeField] private Vector3 shotGunShootPlayerScale = Vector3.one;
+    [SerializeField, Min(0.01f)] private float shootPlayerShotGunMoveDuration = 0.45f;
+    [SerializeField] private AnimationCurve shootPlayerTransitionCurve =
+        new AnimationCurve(new Keyframe(0f, 0f), new Keyframe(1f, 1f));
+
+    [Header("Shoot Enemy Flow")]
+    [SerializeField] private ShotGunShootEnemyAnimator shotGunShootEnemyAnimator;
+    [SerializeField] private Vector3 shotGunShootEnemyCameraPosition;
+    [SerializeField] private Vector3 shotGunShootEnemyCameraEulerAngles;
+    [SerializeField] private Vector3 shotGunShootEnemyScale = Vector3.one;
+    [SerializeField, Min(0.01f)] private float shootEnemyShotGunMoveDuration = 0.45f;
+    [SerializeField] private AnimationCurve shootEnemyTransitionCurve =
+        new AnimationCurve(new Keyframe(0f, 0f), new Keyframe(1f, 1f));
+
+    [Header("Shoot Player Eject Flow")]
+    [SerializeField] private Vector3 shotGunEjectCameraPosition;
+    [SerializeField] private Vector3 shotGunEjectCameraEulerAngles;
+    [SerializeField] private Vector3 shotGunEjectScale = Vector3.one;
+    [SerializeField, Min(0.01f)] private float ejectShotGunMoveDuration = 0.45f;
+    [SerializeField, Min(0.01f)] private float ejectShotGunReturnDuration = 0.45f;
+    [SerializeField] private AnimationCurve ejectTransitionCurve =
+        new AnimationCurve(new Keyframe(0f, 0f), new Keyframe(1f, 1f));
+
+    [Header("Flow")]
+    [SerializeField] private bool startFlowOnStart = true;
+    [SerializeField] private bool logShellInventory;
+
+    private GameFlowState state = GameFlowState.NotStarted;
+    private GameObject spawnedAmmoBox;
+    private AmmoBoxAnimator spawnedAmmoBoxAnimator;
+    private Vector3 initialCameraPosition;
+    private Quaternion initialCameraRotation;
+    private Vector3 initialShotGunPosition;
+    private Quaternion initialShotGunRotation;
+    private Vector3 initialShotGunScale;
+    private IDisposable reloadButtonClickedSubscription;
+    private IDisposable shootPlayerButtonClickedSubscription;
+    private IDisposable shootEnemyButtonClickedSubscription;
+    private Coroutine reloadCoroutine;
+    private Coroutine shootPlayerCoroutine;
+    private Coroutine shootEnemyCoroutine;
+    private Sequence activeTransformTween;
+
+    public GameObject SpawnedAmmoBox => spawnedAmmoBox;
+
+    private void Awake()
+    {
+        if (cameraMovement == null)
+        {
+            cameraMovement = FindObjectOfType<WASDCameraMovement>();
+        }
+
+        if (cameraLook == null)
+        {
+            cameraLook = FindObjectOfType<LimitedCameraLook>();
+        }
+
+        if (shotGunState == null)
+        {
+            shotGunState = FindObjectOfType<ShotGunState>();
+        }
+
+        if (shotGunFocus == null && shotGun != null)
+        {
+            shotGunFocus = shotGun.GetComponent<FocusableObject>();
+            if (shotGunFocus == null)
+            {
+                shotGunFocus = shotGun.gameObject.AddComponent<FocusableObject>();
+            }
+        }
+
+        if (shotGunFocus == null && shotGunState != null)
+        {
+            shotGunFocus = shotGunState.GetComponent<FocusableObject>();
+        }
+
+        if (shotGunFocus == null)
+        {
+            shotGunFocus = FindObjectOfType<FocusableObject>();
+        }
+
+        if (shotGun == null && shotGunFocus != null)
+        {
+            shotGun = shotGunFocus.Target;
+        }
+
+        if (shotGun == null && shotGunState != null)
+        {
+            shotGun = shotGunState.transform;
+        }
+
+        if (shotGunState == null && shotGun != null)
+        {
+            shotGunState = shotGun.GetComponent<ShotGunState>();
+            if (shotGunState == null)
+            {
+                shotGunState = shotGun.gameObject.AddComponent<ShotGunState>();
+            }
+        }
+
+        if (interactionUI == null)
+        {
+            interactionUI = FindObjectOfType<InteractionUIController>();
+        }
+
+        if (bulletSpawner == null)
+        {
+            bulletSpawner = FindObjectOfType<BulletSpawner>();
+        }
+
+        if (shotGunReloadAnimator == null && shotGun != null)
+        {
+            shotGunReloadAnimator = shotGun.GetComponent<ShotGunReloadAnimator>();
+            if (shotGunReloadAnimator == null)
+            {
+                shotGunReloadAnimator = shotGun.gameObject.AddComponent<ShotGunReloadAnimator>();
+            }
+        }
+
+        if (shotGunShootPlayerAnimator == null && shotGun != null)
+        {
+            shotGunShootPlayerAnimator = shotGun.GetComponent<ShotGunShootPlayerAnimator>();
+            if (shotGunShootPlayerAnimator == null)
+            {
+                shotGunShootPlayerAnimator = shotGun.gameObject.AddComponent<ShotGunShootPlayerAnimator>();
+            }
+        }
+
+        if (shotGunShootEnemyAnimator == null && shotGun != null)
+        {
+            shotGunShootEnemyAnimator = shotGun.GetComponent<ShotGunShootEnemyAnimator>();
+            if (shotGunShootEnemyAnimator == null)
+            {
+                shotGunShootEnemyAnimator = shotGun.gameObject.AddComponent<ShotGunShootEnemyAnimator>();
+            }
+        }
+
+        CaptureInitialReloadTransforms();
+    }
+
+    private void OnEnable()
+    {
+        reloadButtonClickedSubscription = GameEventBus.Subscribe<ReloadButtonClickedEvent>(HandleReloadButtonClicked);
+        shootPlayerButtonClickedSubscription = GameEventBus.Subscribe<ShootPlayerButtonClickedEvent>(HandleShootPlayerButtonClicked);
+        shootEnemyButtonClickedSubscription = GameEventBus.Subscribe<ShootEnemyButtonClickedEvent>(HandleShootEnemyButtonClicked);
+    }
+
+    private void OnDisable()
+    {
+        reloadButtonClickedSubscription?.Dispose();
+        reloadButtonClickedSubscription = null;
+        shootPlayerButtonClickedSubscription?.Dispose();
+        shootPlayerButtonClickedSubscription = null;
+        shootEnemyButtonClickedSubscription?.Dispose();
+        shootEnemyButtonClickedSubscription = null;
+        KillOwnedTweens();
+    }
+
+    private void Start()
+    {
+        if (startFlowOnStart)
+        {
+            StartGameFlow();
+        }
+    }
+
+    [ContextMenu("Start Game Flow")]
+    public void StartGameFlow()
+    {
+        StopAllCoroutines();
+        reloadCoroutine = null;
+        shootPlayerCoroutine = null;
+        shootEnemyCoroutine = null;
+        KillOwnedTweens();
+        GameEventBus.Publish(new GameFlowStartedEvent());
+        StartCoroutine(RunGameFlow());
+    }
+
+    private IEnumerator RunGameFlow()
+    {
+        state = GameFlowState.InputLocked;
+        SetPlayerInputLocked(true);
+
+        state = GameFlowState.AmmoBoxFalling;
+        SpawnAmmoBox();
+        if (spawnedAmmoBox == null)
+        {
+            yield break;
+        }
+
+        yield return MoveAmmoBoxToLandingPosition();
+
+        if (bulletSpawnDelayAfterAmmoBoxSpawn > 0f)
+        {
+            yield return new WaitForSeconds(bulletSpawnDelayAfterAmmoBoxSpawn);
+        }
+
+        state = GameFlowState.SpawningBullets;
+        if (bulletSpawner != null)
+        {
+            GameEventBus.Publish(new BulletsSpawnRequestedEvent());
+            bulletSpawner.SetSpawnedBulletsParent(spawnedAmmoBox.transform);
+            bulletSpawner.SpawnLevelBullets();
+            LogShellInventory(
+                $"Spawned shells: Live={bulletSpawner.SpawnedLiveShellCount}, Blank={bulletSpawner.SpawnedBlankShellCount}");
+            GameEventBus.Publish(new BulletsSpawnedEvent());
+        }
+        else
+        {
+            Debug.LogWarning("Game flow has no BulletSpawner assigned.", this);
+        }
+
+        state = GameFlowState.OpeningAmmoBox;
+        yield return OpenAmmoBoxCover();
+
+        state = GameFlowState.Gameplay;
+        SetPlayerInputLocked(false);
+    }
+
+    private void SpawnAmmoBox()
+    {
+        if (ammoBoxPrefab == null)
+        {
+            Debug.LogError("Game flow cannot spawn an ammo box because no prefab is assigned.", this);
+            return;
+        }
+
+        spawnedAmmoBox = Instantiate(
+            ammoBoxPrefab,
+            ammoBoxSpawnPosition,
+            Quaternion.Euler(ammoBoxSpawnRotation),
+            ammoBoxParent);
+        GameEventBus.Publish(new AmmoBoxSpawnedEvent(spawnedAmmoBox));
+
+        spawnedAmmoBoxAnimator = spawnedAmmoBox.GetComponent<AmmoBoxAnimator>();
+        if (spawnedAmmoBoxAnimator == null)
+        {
+            spawnedAmmoBoxAnimator = spawnedAmmoBox.AddComponent<AmmoBoxAnimator>();
+        }
+
+        spawnedAmmoBoxAnimator.ConfigureDrop(
+            ammoBoxLandingPosition,
+            ammoBoxLandingRotation,
+            ammoBoxDropDuration,
+            ammoBoxDropCurve);
+        spawnedAmmoBoxAnimator.ConfigureCover(
+            coverChildName,
+            closedCoverEulerAngles,
+            openCoverEulerAngles,
+            openDuration,
+            openCurve);
+        spawnedAmmoBoxAnimator.DisablePhysics();
+    }
+
+    private static void DisableAmmoBoxPhysics(Transform target)
+    {
+        AmmoBoxAnimator ammoBoxAnimator = target != null ? target.GetComponent<AmmoBoxAnimator>() : null;
+        if (ammoBoxAnimator != null)
+        {
+            ammoBoxAnimator.DisablePhysics();
+            return;
+        }
+
+        Rigidbody rigidbody = target != null ? target.GetComponent<Rigidbody>() : null;
+        if (rigidbody == null)
+        {
+            return;
+        }
+
+        rigidbody.velocity = Vector3.zero;
+        rigidbody.angularVelocity = Vector3.zero;
+        rigidbody.isKinematic = true;
+        rigidbody.useGravity = false;
+    }
+
+    private IEnumerator MoveAmmoBoxToLandingPosition()
+    {
+        if (spawnedAmmoBoxAnimator == null)
+        {
+            yield break;
+        }
+
+        yield return spawnedAmmoBoxAnimator.PlayDrop();
+    }
+
+    private IEnumerator OpenAmmoBoxCover()
+    {
+        if (spawnedAmmoBoxAnimator == null)
+        {
+            yield break;
+        }
+
+        yield return spawnedAmmoBoxAnimator.PlayOpenCover();
+    }
+
+    private void HandleReloadButtonClicked(ReloadButtonClickedEvent evt)
+    {
+        StartReloadFlow();
+    }
+
+    private void HandleShootPlayerButtonClicked(ShootPlayerButtonClickedEvent evt)
+    {
+        StartShootPlayerFlow();
+    }
+
+    private void HandleShootEnemyButtonClicked(ShootEnemyButtonClickedEvent evt)
+    {
+        StartShootEnemyFlow();
+    }
+
+    [ContextMenu("Start Reload Flow")]
+    public void StartReloadFlow()
+    {
+        if (reloadCoroutine != null || shootPlayerCoroutine != null || shootEnemyCoroutine != null)
+        {
+            return;
+        }
+
+        reloadCoroutine = StartCoroutine(RunReloadFlow());
+    }
+
+    [ContextMenu("Start Shoot Player Flow")]
+    public void StartShootPlayerFlow()
+    {
+        if (shootPlayerCoroutine != null || shootEnemyCoroutine != null || reloadCoroutine != null)
+        {
+            return;
+        }
+
+        shootPlayerCoroutine = StartCoroutine(RunShootPlayerFlow());
+    }
+
+    [ContextMenu("Start Shoot Enemy Flow")]
+    public void StartShootEnemyFlow()
+    {
+        if (shootEnemyCoroutine != null || shootPlayerCoroutine != null || reloadCoroutine != null)
+        {
+            return;
+        }
+
+        shootEnemyCoroutine = StartCoroutine(RunShootEnemyFlow());
+    }
+
+    private IEnumerator RunReloadFlow()
+    {
+        bool keepShotGunFocusedDuringCameraMove = shotGunFocus != null && shotGunFocus.IsFocused;
+        GameEventBus.Publish(new ReloadStartedEvent());
+        SetPlayerInputLocked(true);
+
+        if (interactionUI != null)
+        {
+            interactionUI.SetFocusActionsVisible(false);
+        }
+
+        if (cameraLook != null)
+        {
+            cameraLook.SetExternalControl(true);
+        }
+
+        if (shotGunFocus != null)
+        {
+            shotGunFocus.BeginExternalControl();
+        }
+
+        Transform cameraTransform = GetCameraTransform();
+        if (cameraTransform != null)
+        {
+            if (keepShotGunFocusedDuringCameraMove)
+            {
+                shotGunFocus.ApplyExternalFocusedTransform();
+            }
+
+            yield return TweenTransform(
+                cameraTransform,
+                initialCameraPosition,
+                initialCameraRotation,
+                cameraTransform.localScale,
+                reloadCameraMoveDuration,
+                false,
+                null,
+                keepShotGunFocusedDuringCameraMove ? shotGunFocus.ApplyExternalFocusedTransform : null);
+
+            if (keepShotGunFocusedDuringCameraMove)
+            {
+                shotGunFocus.ApplyExternalFocusedTransform();
+            }
+        }
+
+        if (shotGun != null)
+        {
+            yield return TweenTransform(
+                shotGun,
+                shotGunReloadPosition,
+                Quaternion.Euler(shotGunReloadEulerAngles),
+                shotGunReloadScale,
+                reloadShotGunMoveDuration,
+                true);
+        }
+
+        if (spawnedAmmoBox != null)
+        {
+            DisableAmmoBoxPhysics(spawnedAmmoBox.transform);
+            yield return TweenTransform(
+                spawnedAmmoBox.transform,
+                ammoBoxReloadPosition,
+                Quaternion.Euler(ammoBoxReloadEulerAngles),
+                ammoBoxReloadScale,
+                reloadAmmoBoxMoveDuration,
+                true);
+        }
+
+        if (skippedLoadAnimationDelay > 0f)
+        {
+            yield return new WaitForSeconds(skippedLoadAnimationDelay);
+        }
+
+        yield return PlayReloadAnimations();
+
+        if (shotGunState != null && bulletSpawner != null)
+        {
+            shotGunState.LoadShells(bulletSpawner.SpawnedShellKinds);
+            LogShellInventory($"Loaded shells: {shotGunState.GetLoadedShellSummary()}");
+        }
+
+        if (postBoltReturnDelay > 0f)
+        {
+            yield return new WaitForSeconds(postBoltReturnDelay);
+        }
+
+        if (shotGun != null)
+        {
+            yield return TweenTransform(
+                shotGun,
+                initialShotGunPosition,
+                initialShotGunRotation,
+                initialShotGunScale,
+                reloadShotGunReturnDuration,
+                true);
+        }
+
+        if (cameraLook != null)
+        {
+            cameraLook.ResetLookToStartingRotation();
+            cameraLook.SetExternalControl(false);
+        }
+
+        if (shotGunFocus != null)
+        {
+            shotGunFocus.EndExternalControl();
+        }
+
+        SetPlayerInputLocked(false);
+        GameEventBus.Publish(new ReloadCompletedEvent());
+        reloadCoroutine = null;
+    }
+
+    private IEnumerator RunShootPlayerFlow()
+    {
+        yield return RunShotGunShootFlow(
+            shotGunShootPlayerCameraPosition,
+            shotGunShootPlayerCameraEulerAngles,
+            shotGunShootPlayerScale,
+            shootPlayerShotGunMoveDuration,
+            shootPlayerTransitionCurve,
+            PlayShootPlayerAnimation,
+            () => GameEventBus.Publish(new ShootPlayerStartedEvent()),
+            () => GameEventBus.Publish(new ShootPlayerCompletedEvent()));
+        shootPlayerCoroutine = null;
+    }
+
+    private IEnumerator RunShootEnemyFlow()
+    {
+        yield return RunShotGunShootFlow(
+            shotGunShootEnemyCameraPosition,
+            shotGunShootEnemyCameraEulerAngles,
+            shotGunShootEnemyScale,
+            shootEnemyShotGunMoveDuration,
+            shootEnemyTransitionCurve,
+            PlayShootEnemyAnimation,
+            () => GameEventBus.Publish(new ShootEnemyStartedEvent()),
+            () => GameEventBus.Publish(new ShootEnemyCompletedEvent()));
+        shootEnemyCoroutine = null;
+    }
+
+    private IEnumerator RunShotGunShootFlow(
+        Vector3 shotGunCameraPosition,
+        Vector3 shotGunCameraEulerAngles,
+        Vector3 shotGunScale,
+        float shotGunMoveDuration,
+        AnimationCurve transitionCurve,
+        Func<ShotGunShellKind, IEnumerator> playShootAnimation,
+        Action publishStarted,
+        Action publishCompleted)
+    {
+        publishStarted?.Invoke();
+        SetPlayerInputLocked(true);
+
+        if (interactionUI != null)
+        {
+            interactionUI.SetFocusActionsVisible(false);
+        }
+
+        if (cameraLook != null)
+        {
+            cameraLook.SetExternalControl(true);
+        }
+
+        if (shotGunFocus != null)
+        {
+            shotGunFocus.BeginExternalControl();
+        }
+
+        Transform cameraTransform = GetCameraTransform();
+        if (shotGun != null && cameraTransform != null)
+        {
+            Vector3 shotGunWorldPosition = cameraTransform.TransformPoint(shotGunCameraPosition);
+            Quaternion shotGunWorldRotation = cameraTransform.rotation * Quaternion.Euler(shotGunCameraEulerAngles);
+            yield return TweenTransform(
+                shotGun,
+                shotGunWorldPosition,
+                shotGunWorldRotation,
+                shotGunScale,
+                shotGunMoveDuration,
+                true,
+                transitionCurve);
+        }
+
+        ShotGunShellKind firedShellKind = shotGunState != null
+            ? shotGunState.ConsumeNextShell()
+            : ShotGunShellKind.Blank;
+        LogShellInventory(
+            shotGunState != null
+                ? $"ShotGun fired shell kind: {firedShellKind}. After shot: {shotGunState.GetLoadedShellSummary()}"
+                : $"ShotGun fired shell kind: {firedShellKind}. No ShotGunState assigned.");
+
+        GameEventBus.Publish(new ShotGunFiredEvent(firedShellKind));
+
+        if (playShootAnimation != null)
+        {
+            yield return playShootAnimation(firedShellKind);
+        }
+
+        yield return RunShootPlayerEjectPhase(cameraTransform, firedShellKind);
+
+        if (cameraLook != null)
+        {
+            cameraLook.ResetLookToStartingRotation();
+            cameraLook.SetExternalControl(false);
+        }
+
+        if (shotGunFocus != null)
+        {
+            shotGunFocus.EndExternalControl();
+        }
+
+        SetPlayerInputLocked(false);
+        publishCompleted?.Invoke();
+    }
+
+    private IEnumerator PlayShootPlayerAnimation(ShotGunShellKind shellKind)
+    {
+        if (shotGunShootPlayerAnimator == null)
+        {
+            yield break;
+        }
+
+        yield return shotGunShootPlayerAnimator.PlayShootPlayer(shellKind);
+    }
+
+    private IEnumerator PlayShootEnemyAnimation(ShotGunShellKind shellKind)
+    {
+        if (shotGunShootEnemyAnimator == null)
+        {
+            yield break;
+        }
+
+        yield return shotGunShootEnemyAnimator.PlayShootEnemy(shellKind);
+    }
+
+    private IEnumerator RunShootPlayerEjectPhase(Transform cameraTransform, ShotGunShellKind firedShellKind)
+    {
+        if (shotGun != null && cameraTransform != null)
+        {
+            Vector3 ejectWorldPosition = cameraTransform.TransformPoint(shotGunEjectCameraPosition);
+            Quaternion ejectWorldRotation = cameraTransform.rotation * Quaternion.Euler(shotGunEjectCameraEulerAngles);
+            yield return TweenTransform(
+                shotGun,
+                ejectWorldPosition,
+                ejectWorldRotation,
+                shotGunEjectScale,
+                ejectShotGunMoveDuration,
+                true,
+                ejectTransitionCurve);
+        }
+
+        if (shotGunReloadAnimator != null)
+        {
+            yield return shotGunReloadAnimator.PlayBolt(
+                () => GameEventBus.Publish(new ShotGunShellEjectRequestedEvent(firedShellKind, shotGun)));
+        }
+
+        if (shotGun != null)
+        {
+            yield return TweenTransform(
+                shotGun,
+                initialShotGunPosition,
+                initialShotGunRotation,
+                initialShotGunScale,
+                ejectShotGunReturnDuration,
+                true,
+                ejectTransitionCurve);
+        }
+    }
+
+    private IEnumerator TweenTransform(
+        Transform target,
+        Vector3 destinationPosition,
+        Quaternion destinationRotation,
+        Vector3 destinationScale,
+        float duration,
+        bool includeScale,
+        AnimationCurve easeCurve = null,
+        Action onUpdate = null)
+    {
+        target.DOKill();
+        bool completed = false;
+        AnimationCurve targetEaseCurve = easeCurve ?? reloadTransitionCurve;
+        Sequence sequence = DOTween.Sequence();
+        sequence.Join(ApplyEase(target.DOMove(destinationPosition, duration), targetEaseCurve));
+        sequence.Join(ApplyEase(target.DORotateQuaternion(destinationRotation, duration), targetEaseCurve));
+        if (includeScale)
+        {
+            sequence.Join(ApplyEase(target.DOScale(destinationScale, duration), targetEaseCurve));
+        }
+
+        if (onUpdate != null)
+        {
+            sequence.OnUpdate(() => onUpdate());
+        }
+
+        sequence.OnComplete(() => completed = true);
+        activeTransformTween = sequence;
+        yield return sequence.WaitForCompletion();
+        if (activeTransformTween == sequence)
+        {
+            activeTransformTween = null;
+        }
+
+        if (!completed)
+        {
+            yield break;
+        }
+
+        target.SetPositionAndRotation(destinationPosition, destinationRotation);
+        if (includeScale)
+        {
+            target.localScale = destinationScale;
+        }
+    }
+
+    private IEnumerator PlayReloadAnimations()
+    {
+        if (shotGun == null)
+        {
+            yield break;
+        }
+
+        int loadCount = bulletSpawner != null ? bulletSpawner.SpawnedBulletCount : 0;
+        if (shotGunReloadAnimator != null)
+        {
+            yield return shotGunReloadAnimator.PlayReload(loadCount);
+        }
+    }
+
+    private static T ApplyEase<T>(T tween, AnimationCurve curve) where T : Tween
+    {
+        return curve != null ? tween.SetEase(curve) : tween.SetEase(Ease.Linear);
+    }
+
+    private void LogShellInventory(string message)
+    {
+        if (!logShellInventory)
+        {
+            return;
+        }
+
+        Debug.Log(message, this);
+    }
+
+    private void KillOwnedTweens()
+    {
+        activeTransformTween?.Kill();
+        activeTransformTween = null;
+    }
+
+    private void CaptureInitialReloadTransforms()
+    {
+        Transform cameraTransform = GetCameraTransform();
+        if (cameraTransform != null)
+        {
+            initialCameraPosition = cameraTransform.position;
+            initialCameraRotation = cameraTransform.rotation;
+        }
+
+        if (shotGun != null)
+        {
+            initialShotGunPosition = shotGun.position;
+            initialShotGunRotation = shotGun.rotation;
+            initialShotGunScale = shotGun.localScale;
+        }
+    }
+
+    private Transform GetCameraTransform()
+    {
+        if (cameraMovement != null)
+        {
+            return cameraMovement.transform;
+        }
+
+        return cameraLook != null ? cameraLook.transform : null;
+    }
+
+    private void SetPlayerInputLocked(bool locked)
+    {
+        GameEventBus.Publish(new PlayerInputLockChangedEvent(locked));
+
+        if (cameraMovement != null)
+        {
+            cameraMovement.SetMovementLocked(locked);
+        }
+
+        if (cameraLook != null)
+        {
+            cameraLook.SetLookLocked(locked);
+        }
+    }
+
+}

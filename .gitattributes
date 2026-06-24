@@ -1,0 +1,29 @@
+* text=auto
+
+*.cs text
+*.shader text
+*.hlsl text
+*.asmdef text
+*.json text
+*.asset text
+*.meta text
+*.prefab text
+*.unity text
+*.mat text
+*.controller text
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.tga binary
+*.psd binary
+*.fbx binary
+*.ttf binary
+*.ttc binary
+*.otf binary
+*.dll binary
+*.mdb binary
+*.pdf binary
+*.exr binary
+*.zip binary
+*.unitypackage binary
