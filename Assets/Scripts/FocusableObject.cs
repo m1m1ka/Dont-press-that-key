@@ -30,6 +30,7 @@ public sealed class FocusableObject : MonoBehaviour, IFocusableTarget
     public bool IsFocused => isFocused;
     public bool CanFocus => enabled && !externalControl && target != null && playerCamera != null;
     public bool ShowFocusActions => showFocusActions;
+    public UnityEngine.Object Owner => this;
     public Transform Target => target;
 
     private void Awake()

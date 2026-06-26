@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.EventSystems;
 
@@ -7,6 +8,7 @@ public sealed class InspectableItemHoverInteractor : MonoBehaviour
 {
     private const string NonInteractiveLayerName = "Non-Interactive";
     private const string NonInteractiveLayerNameWithTrailingSpace = "Non-Interactive ";
+    private const int MaxRaycastHits = 32;
 
     [SerializeField] private Camera playerCamera;
     [SerializeField] private InteractionUIController interactionUI;
@@ -18,6 +20,7 @@ public sealed class InspectableItemHoverInteractor : MonoBehaviour
     private IHoverableTarget currentHover;
     private IFocusableTarget currentFocus;
     private IDisposable reloadStartedSubscription;
+    private readonly RaycastHit[] raycastHits = new RaycastHit[MaxRaycastHits];
 
     private void Awake()
     {
@@ -116,7 +119,7 @@ public sealed class InspectableItemHoverInteractor : MonoBehaviour
             {
                 ClearCurrentHover();
                 currentFocus.SetFocused(true);
-                GameEventBus.Publish(new FocusStateChangedEvent(true));
+                GameEventBus.Publish(new FocusStateChangedEvent(true, currentFocus.Owner));
                 if (interactionUI != null)
                 {
                     interactionUI.SetFocusActionsVisible(currentFocus.ShowFocusActions);
@@ -126,9 +129,10 @@ public sealed class InspectableItemHoverInteractor : MonoBehaviour
             return;
         }
 
-        if (currentFocus != null)
+        IFocusableTarget previousFocus = currentFocus;
+        if (previousFocus != null)
         {
-            currentFocus.SetFocused(false);
+            previousFocus.SetFocused(false);
         }
 
         currentFocus = focusableTarget;
@@ -138,7 +142,8 @@ public sealed class InspectableItemHoverInteractor : MonoBehaviour
             currentFocus.SetFocused(true);
         }
 
-        GameEventBus.Publish(new FocusStateChangedEvent(currentFocus != null));
+        UnityEngine.Object focusEventTarget = currentFocus != null ? currentFocus.Owner : previousFocus?.Owner;
+        GameEventBus.Publish(new FocusStateChangedEvent(currentFocus != null, focusEventTarget));
         if (interactionUI != null)
         {
             interactionUI.SetFocusActionsVisible(currentFocus != null && currentFocus.ShowFocusActions);
@@ -148,14 +153,56 @@ public sealed class InspectableItemHoverInteractor : MonoBehaviour
     private RaycastHit? FindHit()
     {
         Ray ray = playerCamera.ScreenPointToRay(Input.mousePosition);
-        return Physics.Raycast(
+        int hitCount = Physics.RaycastNonAlloc(
             ray,
-            out RaycastHit hit,
+            raycastHits,
             maximumHoverDistance,
             GetInteractionLayerMask(hoverLayers),
-            QueryTriggerInteraction.Collide)
-            ? hit
-            : null;
+            QueryTriggerInteraction.Collide);
+
+        if (hitCount == 0)
+        {
+            return null;
+        }
+
+        Array.Sort(raycastHits, 0, hitCount, RaycastHitDistanceComparer.Instance);
+        for (int i = 0; i < hitCount; i++)
+        {
+            if (CanUseInteractionHit(raycastHits[i].transform))
+            {
+                return raycastHits[i];
+            }
+        }
+
+        return null;
+    }
+
+    private bool CanUseInteractionHit(Transform hitTransform)
+    {
+        IHoverableTarget hoverableTarget = FindCapability<IHoverableTarget>(hitTransform);
+        if (hoverableTarget != null && hoverableTarget.CanHover)
+        {
+            return true;
+        }
+
+        IFocusableTarget focusableTarget = FindCapability<IFocusableTarget>(hitTransform);
+        if (focusableTarget != null && focusableTarget.CanFocus)
+        {
+            return true;
+        }
+
+        IInteractableTarget interactableTarget = FindCapability<IInteractableTarget>(hitTransform);
+        return interactableTarget != null && interactableTarget.CanInteract;
+    }
+
+    private sealed class RaycastHitDistanceComparer : IComparer<RaycastHit>
+    {
+        public static readonly RaycastHitDistanceComparer Instance = new RaycastHitDistanceComparer();
+
+        public int Compare(RaycastHit left, RaycastHit right)
+        {
+            return left.distance.CompareTo(right.distance);
+        }
     }
 
     private T FindCapability<T>(Transform hitTransform) where T : class
@@ -218,13 +265,14 @@ public sealed class InspectableItemHoverInteractor : MonoBehaviour
         reloadStartedSubscription?.Dispose();
         reloadStartedSubscription = null;
         ClearCurrentHover();
-        if (currentFocus != null)
+        IFocusableTarget previousFocus = currentFocus;
+        if (previousFocus != null)
         {
-            currentFocus.SetFocused(false);
+            previousFocus.SetFocused(false);
             currentFocus = null;
         }
 
-        GameEventBus.Publish(new FocusStateChangedEvent(false));
+        GameEventBus.Publish(new FocusStateChangedEvent(false, previousFocus?.Owner));
         if (interactionUI != null)
         {
             interactionUI.SetFocusActionsVisible(false);
@@ -234,13 +282,14 @@ public sealed class InspectableItemHoverInteractor : MonoBehaviour
     private void HandleReloadStarted(ReloadStartedEvent evt)
     {
         ClearCurrentHover();
-        if (currentFocus != null)
+        IFocusableTarget previousFocus = currentFocus;
+        if (previousFocus != null)
         {
-            currentFocus.SetFocused(false);
+            previousFocus.SetFocused(false);
             currentFocus = null;
         }
 
-        GameEventBus.Publish(new FocusStateChangedEvent(false));
+        GameEventBus.Publish(new FocusStateChangedEvent(false, previousFocus?.Owner));
         if (interactionUI != null)
         {
             interactionUI.SetFocusActionsVisible(false);

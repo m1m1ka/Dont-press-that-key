@@ -10,6 +10,7 @@ public interface IHoverableTarget
 
 public interface IFocusableTarget
 {
+    UnityEngine.Object Owner { get; }
     bool IsFocused { get; }
     bool CanFocus { get; }
     bool ShowFocusActions { get; }

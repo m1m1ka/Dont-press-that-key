@@ -24,6 +24,13 @@ public sealed class ShotGunShootPlayerAnimator : MonoBehaviour
     [SerializeField] private AnimationCurve liveRecoilCurve =
         new AnimationCurve(new Keyframe(0f, 0f), new Keyframe(1f, 1f));
 
+    [Header("Live Fire Effects")]
+    [SerializeField, FormerlySerializedAs("fireEffect")] private Transform playerShootsPlayerFireEffect;
+    [SerializeField] private Transform playerShootsEnemyFireEffect;
+    [SerializeField] private Transform enemyShootsPlayerFireEffect;
+    [SerializeField] private Transform enemyShootsEnemyFireEffect;
+    [SerializeField, Min(0f)] private float fireEffectActiveDuration = 0.2f;
+
     [Header("Blank Fire")]
     [SerializeField] private Vector3 blankRecoilLocalPositionOffset = new Vector3(0f, 0f, -0.035f);
     [SerializeField] private Vector3 blankRecoilLocalEulerOffset = new Vector3(-1.5f, 0f, 0f);
@@ -42,7 +49,9 @@ public sealed class ShotGunShootPlayerAnimator : MonoBehaviour
         new AnimationCurve(new Keyframe(0f, 0f), new Keyframe(1f, 1f));
 
     private Sequence activeSequence;
+    private Coroutine fireEffectCoroutine;
     public ShotGunShellKind LastPlayedShellKind { get; private set; }
+    public ShotGunFireEffectContext LastPlayedFireEffectContext { get; private set; }
 
     private void Awake()
     {
@@ -54,17 +63,23 @@ public sealed class ShotGunShootPlayerAnimator : MonoBehaviour
 
     public IEnumerator PlayShootPlayer(ShotGunShellKind shellKind)
     {
+        yield return PlayShootPlayer(shellKind, ShotGunFireEffectContext.PlayerShootsPlayer);
+    }
+
+    public IEnumerator PlayShootPlayer(ShotGunShellKind shellKind, ShotGunFireEffectContext fireEffectContext)
+    {
         if (shotGun == null)
         {
             yield break;
         }
 
         LastPlayedShellKind = shellKind;
+        LastPlayedFireEffectContext = fireEffectContext;
         yield return PlayShake();
         switch (shellKind)
         {
             case ShotGunShellKind.Live:
-                yield return PlayLiveFire();
+                yield return PlayLiveFire(fireEffectContext);
                 break;
             case ShotGunShellKind.Blank:
                 yield return PlayBlankFire();
@@ -101,8 +116,9 @@ public sealed class ShotGunShootPlayerAnimator : MonoBehaviour
         shotGun.localRotation = startLocalRotation;
     }
 
-    private IEnumerator PlayLiveFire()
+    private IEnumerator PlayLiveFire(ShotGunFireEffectContext fireEffectContext)
     {
+        PlayFireEffect(fireEffectContext);
         yield return PlayFire(
             liveRecoilLocalPositionOffset,
             liveRecoilLocalEulerOffset,
@@ -135,6 +151,8 @@ public sealed class ShotGunShootPlayerAnimator : MonoBehaviour
         Quaternion startLocalRotation = shotGun.localRotation;
         Vector3 recoilLocalPosition = startLocalPosition + recoilPositionOffset;
         Quaternion recoilLocalRotation = startLocalRotation * Quaternion.Euler(recoilEulerOffset);
+
+        GameEventBus.Publish(new ShotGunFiredEvent(LastPlayedShellKind));
 
         shotGun.DOKill();
         activeSequence = DOTween.Sequence();
@@ -185,6 +203,88 @@ public sealed class ShotGunShootPlayerAnimator : MonoBehaviour
         return null;
     }
 
+    private void PlayFireEffect(ShotGunFireEffectContext fireEffectContext)
+    {
+        Transform effect = GetFireEffect(fireEffectContext);
+        if (effect == null)
+        {
+            Debug.LogWarning($"ShotGun live fire has no Fire Effect assigned for {fireEffectContext}.", this);
+            return;
+        }
+
+        if (fireEffectCoroutine != null)
+        {
+            StopCoroutine(fireEffectCoroutine);
+        }
+
+        fireEffectCoroutine = StartCoroutine(PlayFireEffectCoroutine(effect));
+    }
+
+    private IEnumerator PlayFireEffectCoroutine(Transform effect)
+    {
+        SetFireEffectActive(effect, true);
+
+        if (fireEffectActiveDuration > 0f)
+        {
+            yield return new WaitForSeconds(fireEffectActiveDuration);
+            SetFireEffectActive(effect, false);
+        }
+
+        fireEffectCoroutine = null;
+    }
+
+    private Transform GetFireEffect(ShotGunFireEffectContext fireEffectContext)
+    {
+        Transform effect = GetOwnFireEffect(fireEffectContext);
+        if (effect == null && TryGetComponent(out ShotGunShootEnemyAnimator enemyAnimator))
+        {
+            effect = enemyAnimator.GetFireEffectReference(fireEffectContext);
+        }
+
+        return effect;
+    }
+
+    public Transform GetFireEffectReference(ShotGunFireEffectContext fireEffectContext)
+    {
+        return GetOwnFireEffect(fireEffectContext);
+    }
+
+    private Transform GetOwnFireEffect(ShotGunFireEffectContext fireEffectContext)
+    {
+        switch (fireEffectContext)
+        {
+            case ShotGunFireEffectContext.PlayerShootsPlayer:
+                return playerShootsPlayerFireEffect;
+            case ShotGunFireEffectContext.PlayerShootsEnemy:
+                return playerShootsEnemyFireEffect;
+            case ShotGunFireEffectContext.EnemyShootsPlayer:
+                return enemyShootsPlayerFireEffect;
+            case ShotGunFireEffectContext.EnemyShootsEnemy:
+                return enemyShootsEnemyFireEffect;
+            default:
+                return null;
+        }
+    }
+
+    private static void SetFireEffectActive(Transform effect, bool active)
+    {
+        effect.gameObject.SetActive(active);
+
+        ParticleSystem[] particleSystems = effect.GetComponentsInChildren<ParticleSystem>(true);
+        for (int i = 0; i < particleSystems.Length; i++)
+        {
+            if (active)
+            {
+                particleSystems[i].Clear(true);
+                particleSystems[i].Play(true);
+            }
+            else
+            {
+                particleSystems[i].Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear);
+            }
+        }
+    }
+
     private static T ApplyEase<T>(T tween, AnimationCurve curve) where T : Tween
     {
         return curve != null ? tween.SetEase(curve) : tween.SetEase(Ease.Linear);
@@ -194,5 +294,23 @@ public sealed class ShotGunShootPlayerAnimator : MonoBehaviour
     {
         activeSequence?.Kill();
         activeSequence = null;
+        if (fireEffectCoroutine != null)
+        {
+            StopCoroutine(fireEffectCoroutine);
+            fireEffectCoroutine = null;
+        }
+
+        DisableFireEffect(playerShootsPlayerFireEffect);
+        DisableFireEffect(playerShootsEnemyFireEffect);
+        DisableFireEffect(enemyShootsPlayerFireEffect);
+        DisableFireEffect(enemyShootsEnemyFireEffect);
+    }
+
+    private static void DisableFireEffect(Transform effect)
+    {
+        if (effect != null)
+        {
+            SetFireEffectActive(effect, false);
+        }
     }
 }

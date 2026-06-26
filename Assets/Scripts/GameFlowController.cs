@@ -67,6 +67,9 @@ public sealed class GameFlowController : MonoBehaviour
     [SerializeField, FormerlySerializedAs("revolverReloadAnimator")] private ShotGunReloadAnimator shotGunReloadAnimator;
     [SerializeField, Min(0f)] private float postBoltReturnDelay = 0.2f;
 
+    [Header("Ammo Box Dissolve")]
+    [SerializeField] private bool dissolveAmmoBoxAfterReload = true;
+
     [Header("Shoot Player Flow")]
     [SerializeField] private ShotGunShootPlayerAnimator shotGunShootPlayerAnimator;
     [SerializeField] private Vector3 shotGunShootPlayerCameraPosition;
@@ -85,6 +88,30 @@ public sealed class GameFlowController : MonoBehaviour
     [SerializeField] private AnimationCurve shootEnemyTransitionCurve =
         new AnimationCurve(new Keyframe(0f, 0f), new Keyframe(1f, 1f));
 
+    [Header("Enemy Shoot Player Flow")]
+    [SerializeField, FormerlySerializedAs("enemyShootPlayerShotGunCameraPosition")] private Vector3 enemyShootPlayerShotGunWorldPosition;
+    [SerializeField, FormerlySerializedAs("enemyShootPlayerShotGunCameraEulerAngles")] private Vector3 enemyShootPlayerShotGunWorldEulerAngles;
+    [SerializeField] private Vector3 enemyShootPlayerShotGunScale = Vector3.one;
+    [SerializeField, Min(0.01f)] private float enemyShootPlayerShotGunMoveDuration = 0.45f;
+    [SerializeField] private AnimationCurve enemyShootPlayerTransitionCurve =
+        new AnimationCurve(new Keyframe(0f, 0f), new Keyframe(1f, 1f));
+
+    [Header("Enemy Shoot Enemy Flow")]
+    [SerializeField, FormerlySerializedAs("enemyShootEnemyShotGunCameraPosition")] private Vector3 enemyShootEnemyShotGunWorldPosition;
+    [SerializeField, FormerlySerializedAs("enemyShootEnemyShotGunCameraEulerAngles")] private Vector3 enemyShootEnemyShotGunWorldEulerAngles;
+    [SerializeField] private Vector3 enemyShootEnemyShotGunScale = Vector3.one;
+    [SerializeField, Min(0.01f)] private float enemyShootEnemyShotGunMoveDuration = 0.45f;
+    [SerializeField] private AnimationCurve enemyShootEnemyTransitionCurve =
+        new AnimationCurve(new Keyframe(0f, 0f), new Keyframe(1f, 1f));
+
+    [Header("Enemy Shot Eject Flow")]
+    [SerializeField] private Vector3 enemyShotGunEjectWorldPosition;
+    [SerializeField] private Vector3 enemyShotGunEjectWorldEulerAngles;
+    [SerializeField] private Vector3 enemyShotGunEjectScale = Vector3.one;
+    [SerializeField, Min(0.01f)] private float enemyShotGunEjectMoveDuration = 0.45f;
+    [SerializeField] private AnimationCurve enemyEjectTransitionCurve =
+        new AnimationCurve(new Keyframe(0f, 0f), new Keyframe(1f, 1f));
+
     [Header("Shoot Player Eject Flow")]
     [SerializeField] private Vector3 shotGunEjectCameraPosition;
     [SerializeField] private Vector3 shotGunEjectCameraEulerAngles;
@@ -96,6 +123,8 @@ public sealed class GameFlowController : MonoBehaviour
 
     [Header("Flow")]
     [SerializeField] private bool startFlowOnStart = true;
+    [SerializeField, FormerlySerializedAs("enemyShootsPlayerAfterPlayerShootsEnemy")] private bool enemyActsAfterPlayerShootsEnemy = true;
+    [SerializeField, Range(0f, 1f)] private float enemyShootPlayerChance = 0.5f;
     [SerializeField] private bool logShellInventory;
 
     private GameFlowState state = GameFlowState.NotStarted;
@@ -113,6 +142,7 @@ public sealed class GameFlowController : MonoBehaviour
     private Coroutine shootPlayerCoroutine;
     private Coroutine shootEnemyCoroutine;
     private Sequence activeTransformTween;
+    private bool shotGunDepletedAfterLastShot;
 
     public GameObject SpawnedAmmoBox => spawnedAmmoBox;
 
@@ -251,8 +281,15 @@ public sealed class GameFlowController : MonoBehaviour
 
     private IEnumerator RunGameFlow()
     {
-        state = GameFlowState.InputLocked;
         SetPlayerInputLocked(true);
+        yield return RunAmmoBoxSupplyFlow();
+        state = GameFlowState.Gameplay;
+        SetPlayerInputLocked(false);
+    }
+
+    private IEnumerator RunAmmoBoxSupplyFlow()
+    {
+        state = GameFlowState.InputLocked;
 
         state = GameFlowState.AmmoBoxFalling;
         SpawnAmmoBox();
@@ -285,9 +322,6 @@ public sealed class GameFlowController : MonoBehaviour
 
         state = GameFlowState.OpeningAmmoBox;
         yield return OpenAmmoBoxCover();
-
-        state = GameFlowState.Gameplay;
-        SetPlayerInputLocked(false);
     }
 
     private void SpawnAmmoBox()
@@ -461,7 +495,8 @@ public sealed class GameFlowController : MonoBehaviour
 
         if (shotGun != null)
         {
-            yield return TweenTransform(
+            yield return TweenShotGunTransform(
+                ShotGunMovePurpose.ReloadMove,
                 shotGun,
                 shotGunReloadPosition,
                 Quaternion.Euler(shotGunReloadEulerAngles),
@@ -482,6 +517,8 @@ public sealed class GameFlowController : MonoBehaviour
                 true);
         }
 
+        DestroySpawnedBulletEntities();
+
         if (skippedLoadAnimationDelay > 0f)
         {
             yield return new WaitForSeconds(skippedLoadAnimationDelay);
@@ -495,6 +532,11 @@ public sealed class GameFlowController : MonoBehaviour
             LogShellInventory($"Loaded shells: {shotGunState.GetLoadedShellSummary()}");
         }
 
+        if (dissolveAmmoBoxAfterReload)
+        {
+            yield return DissolveSpawnedAmmoBox();
+        }
+
         if (postBoltReturnDelay > 0f)
         {
             yield return new WaitForSeconds(postBoltReturnDelay);
@@ -502,7 +544,8 @@ public sealed class GameFlowController : MonoBehaviour
 
         if (shotGun != null)
         {
-            yield return TweenTransform(
+            yield return TweenShotGunTransform(
+                ShotGunMovePurpose.ReloadReturn,
                 shotGun,
                 initialShotGunPosition,
                 initialShotGunRotation,
@@ -535,6 +578,7 @@ public sealed class GameFlowController : MonoBehaviour
             shotGunShootPlayerScale,
             shootPlayerShotGunMoveDuration,
             shootPlayerTransitionCurve,
+            ShotGunFireEffectContext.PlayerShootsPlayer,
             PlayShootPlayerAnimation,
             () => GameEventBus.Publish(new ShootPlayerStartedEvent()),
             () => GameEventBus.Publish(new ShootPlayerCompletedEvent()));
@@ -549,10 +593,62 @@ public sealed class GameFlowController : MonoBehaviour
             shotGunShootEnemyScale,
             shootEnemyShotGunMoveDuration,
             shootEnemyTransitionCurve,
+            ShotGunFireEffectContext.PlayerShootsEnemy,
             PlayShootEnemyAnimation,
             () => GameEventBus.Publish(new ShootEnemyStartedEvent()),
             () => GameEventBus.Publish(new ShootEnemyCompletedEvent()));
+
+        if (enemyActsAfterPlayerShootsEnemy && !shotGunDepletedAfterLastShot)
+        {
+            yield return RunEnemyTurnShotFlow();
+        }
+
         shootEnemyCoroutine = null;
+    }
+
+    private IEnumerator RunEnemyTurnShotFlow()
+    {
+        if (UnityEngine.Random.value < enemyShootPlayerChance)
+        {
+            yield return RunEnemyShootPlayerFlow();
+            yield break;
+        }
+
+        yield return RunEnemyShootEnemyFlow();
+    }
+
+    private IEnumerator RunEnemyShootPlayerFlow()
+    {
+        yield return RunShotGunShootFlow(
+            enemyShootPlayerShotGunWorldPosition,
+            enemyShootPlayerShotGunWorldEulerAngles,
+            enemyShootPlayerShotGunScale,
+            enemyShootPlayerShotGunMoveDuration,
+            enemyShootPlayerTransitionCurve,
+            ShotGunFireEffectContext.EnemyShootsPlayer,
+            PlayShootEnemyAnimation,
+            () => GameEventBus.Publish(new ShootPlayerStartedEvent()),
+            () => GameEventBus.Publish(new ShootPlayerCompletedEvent()),
+            moveToEjectPositionBeforeBolt: true,
+            useCameraReferenceFrame: false,
+            useEnemyWorldEjectPosition: true);
+    }
+
+    private IEnumerator RunEnemyShootEnemyFlow()
+    {
+        yield return RunShotGunShootFlow(
+            enemyShootEnemyShotGunWorldPosition,
+            enemyShootEnemyShotGunWorldEulerAngles,
+            enemyShootEnemyShotGunScale,
+            enemyShootEnemyShotGunMoveDuration,
+            enemyShootEnemyTransitionCurve,
+            ShotGunFireEffectContext.EnemyShootsEnemy,
+            PlayShootEnemyAnimation,
+            () => GameEventBus.Publish(new ShootEnemyStartedEvent()),
+            () => GameEventBus.Publish(new ShootEnemyCompletedEvent()),
+            moveToEjectPositionBeforeBolt: true,
+            useCameraReferenceFrame: false,
+            useEnemyWorldEjectPosition: true);
     }
 
     private IEnumerator RunShotGunShootFlow(
@@ -561,11 +657,16 @@ public sealed class GameFlowController : MonoBehaviour
         Vector3 shotGunScale,
         float shotGunMoveDuration,
         AnimationCurve transitionCurve,
-        Func<ShotGunShellKind, IEnumerator> playShootAnimation,
+        ShotGunFireEffectContext fireEffectContext,
+        Func<ShotGunShellKind, ShotGunFireEffectContext, IEnumerator> playShootAnimation,
         Action publishStarted,
-        Action publishCompleted)
+        Action publishCompleted,
+        bool moveToEjectPositionBeforeBolt = true,
+        bool useCameraReferenceFrame = true,
+        bool useEnemyWorldEjectPosition = false)
     {
         publishStarted?.Invoke();
+        shotGunDepletedAfterLastShot = false;
         SetPlayerInputLocked(true);
 
         if (interactionUI != null)
@@ -584,11 +685,16 @@ public sealed class GameFlowController : MonoBehaviour
         }
 
         Transform cameraTransform = GetCameraTransform();
-        if (shotGun != null && cameraTransform != null)
+        if (shotGun != null && (!useCameraReferenceFrame || cameraTransform != null))
         {
-            Vector3 shotGunWorldPosition = cameraTransform.TransformPoint(shotGunCameraPosition);
-            Quaternion shotGunWorldRotation = cameraTransform.rotation * Quaternion.Euler(shotGunCameraEulerAngles);
-            yield return TweenTransform(
+            Vector3 shotGunWorldPosition = useCameraReferenceFrame
+                ? cameraTransform.TransformPoint(shotGunCameraPosition)
+                : shotGunCameraPosition;
+            Quaternion shotGunWorldRotation = useCameraReferenceFrame
+                ? cameraTransform.rotation * Quaternion.Euler(shotGunCameraEulerAngles)
+                : Quaternion.Euler(shotGunCameraEulerAngles);
+            yield return TweenShotGunTransform(
+                ShotGunMovePurpose.ShootAimMove,
                 shotGun,
                 shotGunWorldPosition,
                 shotGunWorldRotation,
@@ -601,19 +707,22 @@ public sealed class GameFlowController : MonoBehaviour
         ShotGunShellKind firedShellKind = shotGunState != null
             ? shotGunState.ConsumeNextShell()
             : ShotGunShellKind.Blank;
+        shotGunDepletedAfterLastShot = shotGunState != null && shotGunState.RemainingShellCount <= 0;
         LogShellInventory(
             shotGunState != null
                 ? $"ShotGun fired shell kind: {firedShellKind}. After shot: {shotGunState.GetLoadedShellSummary()}"
                 : $"ShotGun fired shell kind: {firedShellKind}. No ShotGunState assigned.");
 
-        GameEventBus.Publish(new ShotGunFiredEvent(firedShellKind));
-
         if (playShootAnimation != null)
         {
-            yield return playShootAnimation(firedShellKind);
+            yield return playShootAnimation(firedShellKind, fireEffectContext);
         }
 
-        yield return RunShootPlayerEjectPhase(cameraTransform, firedShellKind);
+        yield return RunShootPlayerEjectPhase(
+            cameraTransform,
+            firedShellKind,
+            moveToEjectPositionBeforeBolt,
+            useEnemyWorldEjectPosition);
 
         if (cameraLook != null)
         {
@@ -626,37 +735,60 @@ public sealed class GameFlowController : MonoBehaviour
             shotGunFocus.EndExternalControl();
         }
 
+        if (shotGunDepletedAfterLastShot)
+        {
+            yield return RunAmmoBoxSupplyFlow();
+            state = GameFlowState.Gameplay;
+        }
+
         SetPlayerInputLocked(false);
         publishCompleted?.Invoke();
     }
 
-    private IEnumerator PlayShootPlayerAnimation(ShotGunShellKind shellKind)
+    private IEnumerator PlayShootPlayerAnimation(ShotGunShellKind shellKind, ShotGunFireEffectContext fireEffectContext)
     {
         if (shotGunShootPlayerAnimator == null)
         {
             yield break;
         }
 
-        yield return shotGunShootPlayerAnimator.PlayShootPlayer(shellKind);
+        yield return shotGunShootPlayerAnimator.PlayShootPlayer(shellKind, fireEffectContext);
     }
 
-    private IEnumerator PlayShootEnemyAnimation(ShotGunShellKind shellKind)
+    private IEnumerator PlayShootEnemyAnimation(ShotGunShellKind shellKind, ShotGunFireEffectContext fireEffectContext)
     {
         if (shotGunShootEnemyAnimator == null)
         {
             yield break;
         }
 
-        yield return shotGunShootEnemyAnimator.PlayShootEnemy(shellKind);
+        yield return shotGunShootEnemyAnimator.PlayShootEnemy(shellKind, fireEffectContext);
     }
 
-    private IEnumerator RunShootPlayerEjectPhase(Transform cameraTransform, ShotGunShellKind firedShellKind)
+    private IEnumerator RunShootPlayerEjectPhase(
+        Transform cameraTransform,
+        ShotGunShellKind firedShellKind,
+        bool moveToEjectPositionBeforeBolt,
+        bool useEnemyWorldEjectPosition)
     {
-        if (shotGun != null && cameraTransform != null)
+        if (moveToEjectPositionBeforeBolt && shotGun != null && useEnemyWorldEjectPosition)
+        {
+            yield return TweenShotGunTransform(
+                ShotGunMovePurpose.EjectMove,
+                shotGun,
+                enemyShotGunEjectWorldPosition,
+                Quaternion.Euler(enemyShotGunEjectWorldEulerAngles),
+                enemyShotGunEjectScale,
+                enemyShotGunEjectMoveDuration,
+                true,
+                enemyEjectTransitionCurve);
+        }
+        else if (moveToEjectPositionBeforeBolt && shotGun != null && cameraTransform != null)
         {
             Vector3 ejectWorldPosition = cameraTransform.TransformPoint(shotGunEjectCameraPosition);
             Quaternion ejectWorldRotation = cameraTransform.rotation * Quaternion.Euler(shotGunEjectCameraEulerAngles);
-            yield return TweenTransform(
+            yield return TweenShotGunTransform(
+                ShotGunMovePurpose.EjectMove,
                 shotGun,
                 ejectWorldPosition,
                 ejectWorldRotation,
@@ -674,7 +806,8 @@ public sealed class GameFlowController : MonoBehaviour
 
         if (shotGun != null)
         {
-            yield return TweenTransform(
+            yield return TweenShotGunTransform(
+                ShotGunMovePurpose.EjectReturn,
                 shotGun,
                 initialShotGunPosition,
                 initialShotGunRotation,
@@ -683,6 +816,37 @@ public sealed class GameFlowController : MonoBehaviour
                 true,
                 ejectTransitionCurve);
         }
+    }
+
+    private IEnumerator TweenShotGunTransform(
+        ShotGunMovePurpose purpose,
+        Transform target,
+        Vector3 destinationPosition,
+        Quaternion destinationRotation,
+        Vector3 destinationScale,
+        float duration,
+        bool includeScale,
+        AnimationCurve easeCurve = null,
+        Action onUpdate = null)
+    {
+        GameEventBus.Publish(new ShotGunMoveStartedEvent(
+            target,
+            purpose,
+            target.position,
+            destinationPosition,
+            duration));
+
+        yield return TweenTransform(
+            target,
+            destinationPosition,
+            destinationRotation,
+            destinationScale,
+            duration,
+            includeScale,
+            easeCurve,
+            onUpdate);
+
+        GameEventBus.Publish(new ShotGunMoveCompletedEvent(target, purpose));
     }
 
     private IEnumerator TweenTransform(
@@ -738,11 +902,48 @@ public sealed class GameFlowController : MonoBehaviour
             yield break;
         }
 
-        int loadCount = bulletSpawner != null ? bulletSpawner.SpawnedBulletCount : 0;
+        int loadCount = bulletSpawner != null ? bulletSpawner.SpawnedShellCount : 0;
         if (shotGunReloadAnimator != null)
         {
             yield return shotGunReloadAnimator.PlayReload(loadCount);
         }
+    }
+
+    private void DestroySpawnedBulletEntities()
+    {
+        if (bulletSpawner == null)
+        {
+            return;
+        }
+
+        bulletSpawner.DestroySpawnedBulletEntities();
+    }
+
+    private IEnumerator DissolveSpawnedAmmoBox()
+    {
+        if (spawnedAmmoBox == null)
+        {
+            yield break;
+        }
+
+        DissolveAnimator dissolveAnimator = spawnedAmmoBox.GetComponent<DissolveAnimator>();
+        if (dissolveAnimator == null)
+        {
+            dissolveAnimator = spawnedAmmoBox.GetComponentInChildren<DissolveAnimator>(true);
+        }
+
+        if (dissolveAnimator == null)
+        {
+            Debug.LogWarning("Ammo box has no DissolveAnimator assigned. Destroying it without dissolve animation.", this);
+            Destroy(spawnedAmmoBox);
+            spawnedAmmoBox = null;
+            spawnedAmmoBoxAnimator = null;
+            yield break;
+        }
+
+        yield return dissolveAnimator.PlayAndWait();
+        spawnedAmmoBox = null;
+        spawnedAmmoBoxAnimator = null;
     }
 
     private static T ApplyEase<T>(T tween, AnimationCurve curve) where T : Tween

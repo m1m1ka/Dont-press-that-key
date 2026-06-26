@@ -41,7 +41,7 @@ public sealed class ShotGunReloadAnimator : MonoBehaviour
 
         for (int i = 0; i < shellCount; i++)
         {
-            yield return PlaySingleShellLoad();
+            yield return PlaySingleShellLoad(i, shellCount);
         }
 
         yield return PlayBarrelGuardBolt();
@@ -49,13 +49,15 @@ public sealed class ShotGunReloadAnimator : MonoBehaviour
 
     public IEnumerator PlayBolt(Action onBoltPulled = null)
     {
-        yield return PlayBarrelGuardBolt(onBoltPulled);
+        yield return PlayBarrelGuardBolt(onBoltPulled, onBoltPulled != null);
     }
 
-    private IEnumerator PlaySingleShellLoad()
+    private IEnumerator PlaySingleShellLoad(int shellIndex, int shellCount)
     {
         Quaternion startRotation = shotGun.rotation;
         Quaternion loadedRotation = startRotation * Quaternion.Euler(shellLoadLocalEulerOffset);
+
+        GameEventBus.Publish(new ShotGunShellLoadStartedEvent(shotGun, shellIndex, shellCount));
 
         shotGun.DOKill();
         activeSequence = DOTween.Sequence();
@@ -64,9 +66,11 @@ public sealed class ShotGunReloadAnimator : MonoBehaviour
         yield return activeSequence.WaitForCompletion();
         activeSequence = null;
         shotGun.rotation = startRotation;
+
+        GameEventBus.Publish(new ShotGunShellLoadCompletedEvent(shotGun, shellIndex, shellCount));
     }
 
-    private IEnumerator PlayBarrelGuardBolt(Action onBoltPulled = null)
+    private IEnumerator PlayBarrelGuardBolt(Action onBoltPulled = null, bool ejectsShell = false)
     {
         Transform barrelGuard = FindChild(barrelGuardChildName);
         if (barrelGuard == null)
@@ -81,6 +85,7 @@ public sealed class ShotGunReloadAnimator : MonoBehaviour
         barrelGuard.DOKill();
         activeSequence = DOTween.Sequence();
         activeSequence.Append(ApplyEase(barrelGuard.DOLocalMove(pulledLocalPosition, barrelGuardBoltHalfDuration), barrelGuardBoltCurve));
+        activeSequence.AppendCallback(() => GameEventBus.Publish(new ShotGunBoltPulledEvent(shotGun, ejectsShell)));
         if (onBoltPulled != null)
         {
             activeSequence.AppendCallback(() => onBoltPulled());
