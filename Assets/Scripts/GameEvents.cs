@@ -32,6 +32,48 @@ public struct BulletsSpawnedEvent
 {
 }
 
+public enum NotificationMessageKind
+{
+    AmmoDepleted,
+    TurnChanged
+}
+
+public struct NotificationFlowStartedEvent
+{
+    public NotificationFlowStartedEvent(NotificationMessageKind messageKind, string message)
+    {
+        MessageKind = messageKind;
+        Message = message;
+    }
+
+    public NotificationMessageKind MessageKind { get; }
+    public string Message { get; }
+}
+
+public struct NotificationCameraArrivedEvent
+{
+    public NotificationCameraArrivedEvent(NotificationMessageKind messageKind, string message)
+    {
+        MessageKind = messageKind;
+        Message = message;
+    }
+
+    public NotificationMessageKind MessageKind { get; }
+    public string Message { get; }
+}
+
+public struct NotificationFlowCompletedEvent
+{
+    public NotificationFlowCompletedEvent(NotificationMessageKind messageKind, string message)
+    {
+        MessageKind = messageKind;
+        Message = message;
+    }
+
+    public NotificationMessageKind MessageKind { get; }
+    public string Message { get; }
+}
+
 public struct ReloadStartedEvent
 {
 }
@@ -63,11 +105,97 @@ public struct ShootEnemyStartedEvent
 public struct ShotGunFiredEvent
 {
     public ShotGunFiredEvent(ShotGunShellKind shellKind)
+        : this(shellKind, default, false)
+    {
+    }
+
+    public ShotGunFiredEvent(ShotGunShellKind shellKind, ShotGunFireEffectContext fireContext)
+        : this(shellKind, fireContext, true)
+    {
+    }
+
+    private ShotGunFiredEvent(ShotGunShellKind shellKind, ShotGunFireEffectContext fireContext, bool hasFireContext)
     {
         ShellKind = shellKind;
+        FireContext = fireContext;
+        HasFireContext = hasFireContext;
     }
 
     public ShotGunShellKind ShellKind { get; }
+    public ShotGunFireEffectContext FireContext { get; }
+    public bool HasFireContext { get; }
+}
+
+public struct PlayerHitScreenEffectStartedEvent
+{
+}
+
+public struct PlayerHitScreenEffectCompletedEvent
+{
+}
+
+public enum GameCharacter
+{
+    Player,
+    Enemy
+}
+
+public struct ShotGunHitResolvedEvent
+{
+    public ShotGunHitResolvedEvent(
+        ShotGunShellKind shellKind,
+        ShotGunFireEffectContext fireContext,
+        GameCharacter target,
+        int damage)
+    {
+        ShellKind = shellKind;
+        FireContext = fireContext;
+        Target = target;
+        Damage = damage;
+    }
+
+    public ShotGunShellKind ShellKind { get; }
+    public ShotGunFireEffectContext FireContext { get; }
+    public GameCharacter Target { get; }
+    public int Damage { get; }
+}
+
+public struct CharacterHealthChangedEvent
+{
+    public CharacterHealthChangedEvent(GameCharacter character, int currentHealth, int maxHealth, int delta)
+    {
+        Character = character;
+        CurrentHealth = currentHealth;
+        MaxHealth = maxHealth;
+        Delta = delta;
+    }
+
+    public GameCharacter Character { get; }
+    public int CurrentHealth { get; }
+    public int MaxHealth { get; }
+    public int Delta { get; }
+}
+
+public struct CharacterDiedEvent
+{
+    public CharacterDiedEvent(GameCharacter character)
+    {
+        Character = character;
+    }
+
+    public GameCharacter Character { get; }
+}
+
+public struct LevelProgressChangedEvent
+{
+    public LevelProgressChangedEvent(int currentLevel, int completedLevelCount)
+    {
+        CurrentLevel = currentLevel;
+        CompletedLevelCount = completedLevelCount;
+    }
+
+    public int CurrentLevel { get; }
+    public int CompletedLevelCount { get; }
 }
 
 public enum ShotGunFireEffectContext

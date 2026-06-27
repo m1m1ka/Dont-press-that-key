@@ -15,6 +15,7 @@ public sealed class SoundEffectManager : MonoBehaviour
         AmmoBoxSpawned = 3,
         BulletsSpawnRequested = 4,
         BulletsSpawned = 5,
+        NotificationCameraArrived = 34,
         ReloadButtonClicked = 6,
         ReloadStarted = 7,
         ReloadCompleted = 8,
@@ -269,32 +270,68 @@ public sealed class SoundEffectManager : MonoBehaviour
         PlayClip(clip, worldPosition, volumeScale, 1f, true);
     }
 
+    public void StopAllActiveSounds()
+    {
+        for (int i = activeSources.Count - 1; i >= 0; i--)
+        {
+            AudioSource source = activeSources[i];
+            if (source == null)
+            {
+                activeSources.RemoveAt(i);
+                continue;
+            }
+
+            source.Stop();
+            source.clip = null;
+            source.gameObject.SetActive(false);
+            activeSources.RemoveAt(i);
+            availableSources.Enqueue(source);
+        }
+    }
+
     public void Play(string soundId, Vector3? worldPosition, float volumeScale)
+    {
+        PlayAndGetDuration(soundId, worldPosition, volumeScale);
+    }
+
+    public float PlayAndGetDuration(string soundId)
+    {
+        return PlayAndGetDuration(soundId, null, 1f);
+    }
+
+    public float PlayAndGetDuration(string soundId, float volumeScale)
+    {
+        return PlayAndGetDuration(soundId, null, volumeScale);
+    }
+
+    public float PlayAndGetDuration(string soundId, Vector3? worldPosition, float volumeScale)
     {
         if (string.IsNullOrWhiteSpace(soundId))
         {
-            return;
+            return 0f;
         }
 
         if (!soundsById.TryGetValue(soundId, out SoundEffect sound))
         {
             Debug.LogWarning($"SoundEffectManager has no sound with id '{soundId}'.", this);
-            return;
+            return 0f;
         }
 
         if (!sound.HasClips || !sound.CanPlay())
         {
-            return;
+            return 0f;
         }
 
         AudioClip clip = sound.GetClip();
         if (clip == null)
         {
-            return;
+            return 0f;
         }
 
-        PlayClip(clip, worldPosition, sound.GetVolume(volumeScale), sound.GetPitch(), sound.Spatial || worldPosition.HasValue);
+        float pitch = sound.GetPitch();
+        PlayClip(clip, worldPosition, sound.GetVolume(volumeScale), pitch, sound.Spatial || worldPosition.HasValue);
         sound.MarkPlayed();
+        return GetClipPlaybackDuration(clip, pitch);
     }
 
     public static void Request(string soundId)
@@ -323,6 +360,17 @@ public sealed class SoundEffectManager : MonoBehaviour
         source.gameObject.SetActive(true);
         source.Play();
         activeSources.Add(source);
+    }
+
+    private static float GetClipPlaybackDuration(AudioClip clip, float pitch)
+    {
+        if (clip == null)
+        {
+            return 0f;
+        }
+
+        float absolutePitch = Mathf.Abs(pitch);
+        return absolutePitch > 0f ? clip.length / absolutePitch : clip.length;
     }
 
     private AudioSource GetSource()
@@ -400,6 +448,7 @@ public sealed class SoundEffectManager : MonoBehaviour
         subscriptions.Add(GameEventBus.Subscribe<AmmoBoxSpawnedEvent>(evt => PlayBindings(GameEventSound.AmmoBoxSpawned, evt.AmmoBox != null ? evt.AmmoBox.transform.position : (Vector3?)null)));
         subscriptions.Add(GameEventBus.Subscribe<BulletsSpawnRequestedEvent>(_ => PlayBindings(GameEventSound.BulletsSpawnRequested)));
         subscriptions.Add(GameEventBus.Subscribe<BulletsSpawnedEvent>(_ => PlayBindings(GameEventSound.BulletsSpawned)));
+        subscriptions.Add(GameEventBus.Subscribe<NotificationCameraArrivedEvent>(_ => PlayBindings(GameEventSound.NotificationCameraArrived)));
         subscriptions.Add(GameEventBus.Subscribe<ReloadButtonClickedEvent>(_ => PlayBindings(GameEventSound.ReloadButtonClicked)));
         subscriptions.Add(GameEventBus.Subscribe<ReloadStartedEvent>(_ => PlayBindings(GameEventSound.ReloadStarted)));
         subscriptions.Add(GameEventBus.Subscribe<ReloadCompletedEvent>(_ => PlayBindings(GameEventSound.ReloadCompleted)));

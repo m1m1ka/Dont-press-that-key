@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Collections.Generic;
 using DG.Tweening;
 using UnityEngine;
 using UnityEngine.Serialization;
@@ -38,6 +39,19 @@ public sealed class GameFlowController : MonoBehaviour
     [Header("Bullets")]
     [SerializeField] private BulletSpawner bulletSpawner;
     [SerializeField, Min(0f)] private float bulletSpawnDelayAfterAmmoBoxSpawn = 1f;
+
+    [Header("Notification Flow")]
+    [SerializeField] private NotificationScreenController notificationScreen;
+    [SerializeField] private Vector3 notificationCameraPosition;
+    [SerializeField] private Vector3 notificationCameraEulerAngles;
+    [SerializeField, Min(0.01f)] private float notificationCameraMoveDuration = 0.45f;
+    [SerializeField] private bool returnCameraAfterNotification = true;
+    [SerializeField, Min(0.01f)] private float notificationCameraReturnDuration = 0.45f;
+    [SerializeField, Min(0f)] private float notificationDisplayDuration = 1.2f;
+    [SerializeField] private AnimationCurve notificationTransitionCurve =
+        new AnimationCurve(new Keyframe(0f, 0f), new Keyframe(1f, 1f));
+    [SerializeField, TextArea] private string ammoDepletedNotificationMessage = "Ammo depleted.";
+    [SerializeField, TextArea] private string turnChangedNotificationMessage = "Enemy turn.";
 
     [Header("Open Animation")]
     [SerializeField] private Vector3 closedCoverEulerAngles = new Vector3(-90f, 0f, 0f);
@@ -125,6 +139,7 @@ public sealed class GameFlowController : MonoBehaviour
     [SerializeField] private bool startFlowOnStart = true;
     [SerializeField, FormerlySerializedAs("enemyShootsPlayerAfterPlayerShootsEnemy")] private bool enemyActsAfterPlayerShootsEnemy = true;
     [SerializeField, Range(0f, 1f)] private float enemyShootPlayerChance = 0.5f;
+    [SerializeField, Min(0f)] private float playerHitScreenEffectStartGraceDuration = 0.2f;
     [SerializeField] private bool logShellInventory;
 
     private GameFlowState state = GameFlowState.NotStarted;
@@ -209,6 +224,11 @@ public sealed class GameFlowController : MonoBehaviour
         if (bulletSpawner == null)
         {
             bulletSpawner = FindObjectOfType<BulletSpawner>();
+        }
+
+        if (notificationScreen == null)
+        {
+            notificationScreen = FindObjectOfType<NotificationScreenController>();
         }
 
         if (shotGunReloadAnimator == null && shotGun != null)
@@ -528,7 +548,7 @@ public sealed class GameFlowController : MonoBehaviour
 
         if (shotGunState != null && bulletSpawner != null)
         {
-            shotGunState.LoadShells(bulletSpawner.SpawnedShellKinds);
+            shotGunState.LoadShells(GetRandomizedSpawnedShellKinds());
             LogShellInventory($"Loaded shells: {shotGunState.GetLoadedShellSummary()}");
         }
 
@@ -600,6 +620,9 @@ public sealed class GameFlowController : MonoBehaviour
 
         if (enemyActsAfterPlayerShootsEnemy && !shotGunDepletedAfterLastShot)
         {
+            yield return RunNotificationFlow(
+                NotificationMessageKind.TurnChanged,
+                turnChangedNotificationMessage);
             yield return RunEnemyTurnShotFlow();
         }
 
@@ -713,10 +736,34 @@ public sealed class GameFlowController : MonoBehaviour
                 ? $"ShotGun fired shell kind: {firedShellKind}. After shot: {shotGunState.GetLoadedShellSummary()}"
                 : $"ShotGun fired shell kind: {firedShellKind}. No ShotGunState assigned.");
 
+        bool waitForPlayerHitScreenEffect = IsLiveShotHittingPlayer(firedShellKind, fireEffectContext);
+        bool playerHitScreenEffectStarted = false;
+        bool playerHitScreenEffectCompleted = false;
+        IDisposable playerHitScreenEffectStartedSubscription = null;
+        IDisposable playerHitScreenEffectCompletedSubscription = null;
+        if (waitForPlayerHitScreenEffect)
+        {
+            playerHitScreenEffectStartedSubscription =
+                GameEventBus.Subscribe<PlayerHitScreenEffectStartedEvent>(_ => playerHitScreenEffectStarted = true);
+            playerHitScreenEffectCompletedSubscription =
+                GameEventBus.Subscribe<PlayerHitScreenEffectCompletedEvent>(_ => playerHitScreenEffectCompleted = true);
+        }
+
         if (playShootAnimation != null)
         {
             yield return playShootAnimation(firedShellKind, fireEffectContext);
         }
+
+        if (waitForPlayerHitScreenEffect)
+        {
+            yield return WaitForPlayerHitScreenEffect(
+                () => playerHitScreenEffectStarted,
+                () => playerHitScreenEffectCompleted);
+            playerHitScreenEffectStartedSubscription?.Dispose();
+            playerHitScreenEffectCompletedSubscription?.Dispose();
+        }
+
+        PublishShotGunHitResolved(firedShellKind, fireEffectContext);
 
         yield return RunShootPlayerEjectPhase(
             cameraTransform,
@@ -737,6 +784,9 @@ public sealed class GameFlowController : MonoBehaviour
 
         if (shotGunDepletedAfterLastShot)
         {
+            yield return RunNotificationFlow(
+                NotificationMessageKind.AmmoDepleted,
+                ammoDepletedNotificationMessage);
             yield return RunAmmoBoxSupplyFlow();
             state = GameFlowState.Gameplay;
         }
@@ -763,6 +813,53 @@ public sealed class GameFlowController : MonoBehaviour
         }
 
         yield return shotGunShootEnemyAnimator.PlayShootEnemy(shellKind, fireEffectContext);
+    }
+
+    private static void PublishShotGunHitResolved(ShotGunShellKind shellKind, ShotGunFireEffectContext fireEffectContext)
+    {
+        GameCharacter target = GetShotTarget(fireEffectContext);
+        int damage = shellKind == ShotGunShellKind.Live ? 1 : 0;
+        GameEventBus.Publish(new ShotGunHitResolvedEvent(shellKind, fireEffectContext, target, damage));
+    }
+
+    private IEnumerator WaitForPlayerHitScreenEffect(Func<bool> hasStarted, Func<bool> hasCompleted)
+    {
+        float startWaitElapsed = 0f;
+        while (!hasStarted() && startWaitElapsed < playerHitScreenEffectStartGraceDuration)
+        {
+            startWaitElapsed += Time.deltaTime;
+            yield return null;
+        }
+
+        if (!hasStarted())
+        {
+            yield break;
+        }
+
+        while (!hasCompleted())
+        {
+            yield return null;
+        }
+    }
+
+    private static bool IsLiveShotHittingPlayer(ShotGunShellKind shellKind, ShotGunFireEffectContext fireEffectContext)
+    {
+        return shellKind == ShotGunShellKind.Live && GetShotTarget(fireEffectContext) == GameCharacter.Player;
+    }
+
+    private static GameCharacter GetShotTarget(ShotGunFireEffectContext fireEffectContext)
+    {
+        switch (fireEffectContext)
+        {
+            case ShotGunFireEffectContext.PlayerShootsPlayer:
+            case ShotGunFireEffectContext.EnemyShootsPlayer:
+                return GameCharacter.Player;
+            case ShotGunFireEffectContext.PlayerShootsEnemy:
+            case ShotGunFireEffectContext.EnemyShootsEnemy:
+                return GameCharacter.Enemy;
+            default:
+                return GameCharacter.Enemy;
+        }
     }
 
     private IEnumerator RunShootPlayerEjectPhase(
@@ -815,6 +912,93 @@ public sealed class GameFlowController : MonoBehaviour
                 ejectShotGunReturnDuration,
                 true,
                 ejectTransitionCurve);
+        }
+    }
+
+    private IEnumerator RunNotificationFlow(NotificationMessageKind messageKind, string message)
+    {
+        GameEventBus.Publish(new NotificationFlowStartedEvent(messageKind, message));
+
+        Transform cameraTransform = GetCameraTransform();
+        if (cameraTransform == null)
+        {
+            DisplayNotification(message);
+            if (notificationDisplayDuration > 0f)
+            {
+                yield return new WaitForSeconds(notificationDisplayDuration);
+            }
+
+            RestoreRegularNotification();
+            GameEventBus.Publish(new NotificationFlowCompletedEvent(messageKind, message));
+            yield break;
+        }
+
+        Vector3 previousCameraPosition = cameraTransform.position;
+        Quaternion previousCameraRotation = cameraTransform.rotation;
+        Vector3 previousCameraScale = cameraTransform.localScale;
+
+        SetPlayerInputLocked(true);
+        if (interactionUI != null)
+        {
+            interactionUI.SetFocusActionsVisible(false);
+        }
+
+        if (cameraLook != null)
+        {
+            cameraLook.SetExternalControl(true);
+        }
+
+        yield return TweenTransform(
+            cameraTransform,
+            notificationCameraPosition,
+            Quaternion.Euler(notificationCameraEulerAngles),
+            cameraTransform.localScale,
+            notificationCameraMoveDuration,
+            false,
+            notificationTransitionCurve);
+
+        GameEventBus.Publish(new NotificationCameraArrivedEvent(messageKind, message));
+        DisplayNotification(message);
+
+        if (notificationDisplayDuration > 0f)
+        {
+            yield return new WaitForSeconds(notificationDisplayDuration);
+        }
+
+        if (returnCameraAfterNotification)
+        {
+            yield return TweenTransform(
+                cameraTransform,
+                previousCameraPosition,
+                previousCameraRotation,
+                previousCameraScale,
+                notificationCameraReturnDuration,
+                false,
+                notificationTransitionCurve);
+        }
+
+        if (cameraLook != null)
+        {
+            cameraLook.SetExternalControl(false);
+        }
+
+        RestoreRegularNotification();
+        GameEventBus.Publish(new NotificationFlowCompletedEvent(messageKind, message));
+    }
+
+    private void DisplayNotification(string message)
+    {
+        if (notificationScreen != null)
+        {
+            notificationScreen.Show(message);
+        }
+    }
+
+    private void RestoreRegularNotification()
+    {
+        if (notificationScreen != null)
+        {
+            notificationScreen.ShowRegular();
         }
     }
 
@@ -907,6 +1091,31 @@ public sealed class GameFlowController : MonoBehaviour
         {
             yield return shotGunReloadAnimator.PlayReload(loadCount);
         }
+    }
+
+    private IReadOnlyList<ShotGunShellKind> GetRandomizedSpawnedShellKinds()
+    {
+        List<ShotGunShellKind> randomizedShellKinds = new List<ShotGunShellKind>();
+        if (bulletSpawner == null)
+        {
+            return randomizedShellKinds;
+        }
+
+        IReadOnlyList<ShotGunShellKind> shellKinds = bulletSpawner.SpawnedShellKinds;
+        for (int i = 0; i < shellKinds.Count; i++)
+        {
+            randomizedShellKinds.Add(shellKinds[i]);
+        }
+
+        for (int i = randomizedShellKinds.Count - 1; i > 0; i--)
+        {
+            int swapIndex = UnityEngine.Random.Range(0, i + 1);
+            ShotGunShellKind shellKind = randomizedShellKinds[i];
+            randomizedShellKinds[i] = randomizedShellKinds[swapIndex];
+            randomizedShellKinds[swapIndex] = shellKind;
+        }
+
+        return randomizedShellKinds;
     }
 
     private void DestroySpawnedBulletEntities()

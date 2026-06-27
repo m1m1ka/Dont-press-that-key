@@ -152,7 +152,7 @@ public sealed class ShotGunShootEnemyAnimator : MonoBehaviour
         Vector3 recoilLocalPosition = startLocalPosition + recoilPositionOffset;
         Quaternion recoilLocalRotation = startLocalRotation * Quaternion.Euler(recoilEulerOffset);
 
-        GameEventBus.Publish(new ShotGunFiredEvent(LastPlayedShellKind));
+        GameEventBus.Publish(new ShotGunFiredEvent(LastPlayedShellKind, LastPlayedFireEffectContext));
 
         shotGun.DOKill();
         activeSequence = DOTween.Sequence();
