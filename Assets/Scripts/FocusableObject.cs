@@ -22,12 +22,14 @@ public sealed class FocusableObject : MonoBehaviour, IFocusableTarget
     private Vector3 originalPosition;
     private Quaternion originalRotation;
     private Vector3 originalScale;
+    private Quaternion focusedRotationOffset = Quaternion.identity;
     private bool isFocused;
     private bool isTransitioning;
     private bool externalControl;
     private Sequence transitionSequence;
 
     public bool IsFocused => isFocused;
+    public bool IsTransitioning => isTransitioning;
     public bool CanFocus => enabled && !externalControl && target != null && playerCamera != null;
     public bool ShowFocusActions => showFocusActions;
     public UnityEngine.Object Owner => this;
@@ -67,6 +69,11 @@ public sealed class FocusableObject : MonoBehaviour, IFocusableTarget
 
         isFocused = focused;
         isTransitioning = true;
+        if (!focused)
+        {
+            focusedRotationOffset = Quaternion.identity;
+        }
+
         transitionSequence?.Kill();
         target.DOKill();
 
@@ -96,6 +103,7 @@ public sealed class FocusableObject : MonoBehaviour, IFocusableTarget
         externalControl = true;
         isFocused = false;
         isTransitioning = false;
+        focusedRotationOffset = Quaternion.identity;
         transitionSequence?.Kill();
         transitionSequence = null;
         if (target != null)
@@ -125,10 +133,25 @@ public sealed class FocusableObject : MonoBehaviour, IFocusableTarget
     {
         transitionSequence?.Kill();
         transitionSequence = null;
+        focusedRotationOffset = Quaternion.identity;
         if (target != null)
         {
             target.DOKill();
             RestoreOriginalTransform();
+        }
+    }
+
+    public void SetFocusActionsVisibleWhenFocused(bool visible)
+    {
+        showFocusActions = visible;
+    }
+
+    public void SetFocusedRotationOffset(Quaternion localRotationOffset)
+    {
+        focusedRotationOffset = localRotationOffset;
+        if (isFocused && !isTransitioning && !externalControl)
+        {
+            ApplyFocusedTransform();
         }
     }
 
@@ -191,7 +214,7 @@ public sealed class FocusableObject : MonoBehaviour, IFocusableTarget
     private void ApplyFocusedTransform()
     {
         GetFocusedDestination(out Vector3 position, out Quaternion rotation, out Vector3 scale);
-        target.SetPositionAndRotation(position, rotation);
+        target.SetPositionAndRotation(position, rotation * focusedRotationOffset);
         target.localScale = scale;
     }
 
@@ -210,6 +233,7 @@ public sealed class FocusableObject : MonoBehaviour, IFocusableTarget
     {
         transitionSequence?.Kill();
         transitionSequence = null;
+        focusedRotationOffset = Quaternion.identity;
         if (target != null)
         {
             target.DOKill();

@@ -3,7 +3,11 @@ using UnityEngine;
 [DisallowMultipleComponent]
 public sealed class InspectableItem : MonoBehaviour, IHoverableTarget
 {
+    [Header("Item Info")]
     [SerializeField] private string displayName = "Inspectable Item";
+    [SerializeField, TextArea] private string itemDescription;
+
+    [Header("Outline")]
     [SerializeField] private Shader outlineShader;
     [SerializeField] private Shader outlineMaskShader;
     [SerializeField, ColorUsage(false, true)] private Color outlineColor = new Color(1f, 0.55f, 0.08f, 1f);
@@ -37,6 +41,8 @@ public sealed class InspectableItem : MonoBehaviour, IHoverableTarget
     };
 
     public string DisplayName => displayName;
+    public string ItemName => displayName;
+    public string ItemDescription => itemDescription;
     public UnityEngine.Object Owner => this;
     public bool CanHover => enabled;
 
@@ -51,7 +57,7 @@ public sealed class InspectableItem : MonoBehaviour, IHoverableTarget
         originalMaterials = new Material[renderers.Length][];
         for (int i = 0; i < renderers.Length; i++)
         {
-            originalMaterials[i] = renderers[i].sharedMaterials;
+            originalMaterials[i] = GetBaseMaterials(renderers[i]);
         }
 
         if (ensureCollider)
@@ -78,6 +84,7 @@ public sealed class InspectableItem : MonoBehaviour, IHoverableTarget
                 continue;
             }
 
+            originalMaterials[i] = GetBaseMaterials(targetRenderer);
             if (!visible)
             {
                 targetRenderer.sharedMaterials = originalMaterials[i];
@@ -99,6 +106,63 @@ public sealed class InspectableItem : MonoBehaviour, IHoverableTarget
 
             targetRenderer.sharedMaterials = highlightedMaterials;
         }
+    }
+
+    private Material[] GetBaseMaterials(Renderer targetRenderer)
+    {
+        if (targetRenderer == null)
+        {
+            return new Material[0];
+        }
+
+        Material[] sharedMaterials = targetRenderer.sharedMaterials;
+        int baseMaterialCount = 0;
+        for (int i = 0; i < sharedMaterials.Length; i++)
+        {
+            if (!IsRuntimeOutlineMaterial(sharedMaterials[i]))
+            {
+                baseMaterialCount++;
+            }
+        }
+
+        Material[] baseMaterials = new Material[baseMaterialCount];
+        int baseMaterialIndex = 0;
+        for (int i = 0; i < sharedMaterials.Length; i++)
+        {
+            Material material = sharedMaterials[i];
+            if (IsRuntimeOutlineMaterial(material))
+            {
+                continue;
+            }
+
+            baseMaterials[baseMaterialIndex] = material;
+            baseMaterialIndex++;
+        }
+
+        return baseMaterials;
+    }
+
+    private bool IsRuntimeOutlineMaterial(Material material)
+    {
+        return material == outlineMaskMaterial || IsRuntimeOutlineDirectionMaterial(material);
+    }
+
+    private bool IsRuntimeOutlineDirectionMaterial(Material material)
+    {
+        if (outlineMaterials == null || material == null)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < outlineMaterials.Length; i++)
+        {
+            if (material == outlineMaterials[i])
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public void ApplyOutlineDefaults(Shader defaultOutlineShader, Shader defaultOutlineMaskShader)

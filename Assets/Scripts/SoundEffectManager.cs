@@ -43,7 +43,8 @@ public sealed class SoundEffectManager : MonoBehaviour
         InspectableHovered = 30,
         InspectableHoverCleared = 31,
         ShotGunFocusStarted = 32,
-        ShotGunFocusEnded = 33
+        ShotGunFocusEnded = 33,
+        RevealCurrentShotGunShellRequested = 35
     }
 
     [Serializable]
@@ -449,6 +450,7 @@ public sealed class SoundEffectManager : MonoBehaviour
         subscriptions.Add(GameEventBus.Subscribe<BulletsSpawnRequestedEvent>(_ => PlayBindings(GameEventSound.BulletsSpawnRequested)));
         subscriptions.Add(GameEventBus.Subscribe<BulletsSpawnedEvent>(_ => PlayBindings(GameEventSound.BulletsSpawned)));
         subscriptions.Add(GameEventBus.Subscribe<NotificationCameraArrivedEvent>(_ => PlayBindings(GameEventSound.NotificationCameraArrived)));
+        subscriptions.Add(GameEventBus.Subscribe<RevealCurrentShotGunShellRequestedEvent>(_ => PlayBindings(GameEventSound.RevealCurrentShotGunShellRequested)));
         subscriptions.Add(GameEventBus.Subscribe<ReloadButtonClickedEvent>(_ => PlayBindings(GameEventSound.ReloadButtonClicked)));
         subscriptions.Add(GameEventBus.Subscribe<ReloadStartedEvent>(_ => PlayBindings(GameEventSound.ReloadStarted)));
         subscriptions.Add(GameEventBus.Subscribe<ReloadCompletedEvent>(_ => PlayBindings(GameEventSound.ReloadCompleted)));

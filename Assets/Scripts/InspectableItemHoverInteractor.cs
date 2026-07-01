@@ -20,6 +20,7 @@ public sealed class InspectableItemHoverInteractor : MonoBehaviour
     private IHoverableTarget currentHover;
     private IFocusableTarget currentFocus;
     private IDisposable reloadStartedSubscription;
+    private IDisposable focusedTargetRemovedSubscription;
     private readonly RaycastHit[] raycastHits = new RaycastHit[MaxRaycastHits];
 
     private void Awake()
@@ -33,6 +34,7 @@ public sealed class InspectableItemHoverInteractor : MonoBehaviour
     private void OnEnable()
     {
         reloadStartedSubscription = GameEventBus.Subscribe<ReloadStartedEvent>(HandleReloadStarted);
+        focusedTargetRemovedSubscription = GameEventBus.Subscribe<FocusedTargetRemovedEvent>(HandleFocusedTargetRemoved);
     }
 
     private void Update()
@@ -56,6 +58,11 @@ public sealed class InspectableItemHoverInteractor : MonoBehaviour
 
     private void UpdateHover(RaycastHit? hit)
     {
+        if (!IsAlive(currentHover))
+        {
+            currentHover = null;
+        }
+
         IHoverableTarget hoveredTarget = hit.HasValue ? FindCapability<IHoverableTarget>(hit.Value.transform) : null;
         if (hoveredTarget != null && !hoveredTarget.CanHover)
         {
@@ -83,7 +90,10 @@ public sealed class InspectableItemHoverInteractor : MonoBehaviour
         currentHover.SetHovered(true);
         if (interactionUI != null)
         {
-            interactionUI.ShowHoveredItem(currentHover.DisplayName, currentHover.Owner);
+            string description = currentHover is InspectableItem hoveredInspectableItem
+                ? hoveredInspectableItem.ItemDescription
+                : null;
+            interactionUI.ShowHoveredItem(currentHover.DisplayName, currentHover.Owner, description);
         }
     }
 
@@ -113,6 +123,11 @@ public sealed class InspectableItemHoverInteractor : MonoBehaviour
 
     private void SetFocusedTarget(IFocusableTarget focusableTarget)
     {
+        if (!IsAlive(currentFocus))
+        {
+            currentFocus = null;
+        }
+
         if (currentFocus == focusableTarget)
         {
             if (currentFocus != null && !currentFocus.IsFocused)
@@ -130,7 +145,7 @@ public sealed class InspectableItemHoverInteractor : MonoBehaviour
         }
 
         IFocusableTarget previousFocus = currentFocus;
-        if (previousFocus != null)
+        if (IsAlive(previousFocus))
         {
             previousFocus.SetFocused(false);
         }
@@ -142,7 +157,9 @@ public sealed class InspectableItemHoverInteractor : MonoBehaviour
             currentFocus.SetFocused(true);
         }
 
-        UnityEngine.Object focusEventTarget = currentFocus != null ? currentFocus.Owner : previousFocus?.Owner;
+        UnityEngine.Object focusEventTarget = currentFocus != null
+            ? currentFocus.Owner
+            : IsAlive(previousFocus) ? previousFocus.Owner : null;
         GameEventBus.Publish(new FocusStateChangedEvent(currentFocus != null, focusEventTarget));
         if (interactionUI != null)
         {
@@ -241,6 +258,12 @@ public sealed class InspectableItemHoverInteractor : MonoBehaviour
 
     private void ClearCurrentHover()
     {
+        if (!IsAlive(currentHover))
+        {
+            currentHover = null;
+            return;
+        }
+
         if (currentHover == null)
         {
             return;
@@ -264,35 +287,63 @@ public sealed class InspectableItemHoverInteractor : MonoBehaviour
     {
         reloadStartedSubscription?.Dispose();
         reloadStartedSubscription = null;
+        focusedTargetRemovedSubscription?.Dispose();
+        focusedTargetRemovedSubscription = null;
         ClearCurrentHover();
-        IFocusableTarget previousFocus = currentFocus;
-        if (previousFocus != null)
+        ClearCurrentFocus(true);
+    }
+
+    private void HandleReloadStarted(ReloadStartedEvent evt)
+    {
+        ClearCurrentHover();
+        ClearCurrentFocus(true);
+    }
+
+    private void HandleFocusedTargetRemoved(FocusedTargetRemovedEvent evt)
+    {
+        if (currentFocus == null)
         {
-            previousFocus.SetFocused(false);
-            currentFocus = null;
+            return;
         }
 
-        GameEventBus.Publish(new FocusStateChangedEvent(false, previousFocus?.Owner));
+        UnityEngine.Object currentOwner = IsAlive(currentFocus) ? currentFocus.Owner : null;
+        if (evt.FocusTarget != null && currentOwner != evt.FocusTarget)
+        {
+            return;
+        }
+
+        ClearCurrentFocus(false, evt.FocusTarget);
+    }
+
+    private void ClearCurrentFocus(bool restorePreviousFocus, UnityEngine.Object fallbackOwner = null)
+    {
+        IFocusableTarget previousFocus = currentFocus;
+        UnityEngine.Object previousOwner = IsAlive(previousFocus) ? previousFocus.Owner : fallbackOwner;
+        if (restorePreviousFocus && IsAlive(previousFocus))
+        {
+            previousFocus.SetFocused(false);
+        }
+
+        currentFocus = null;
+        GameEventBus.Publish(new FocusStateChangedEvent(false, previousOwner));
         if (interactionUI != null)
         {
             interactionUI.SetFocusActionsVisible(false);
         }
     }
 
-    private void HandleReloadStarted(ReloadStartedEvent evt)
+    private static bool IsAlive(object target)
     {
-        ClearCurrentHover();
-        IFocusableTarget previousFocus = currentFocus;
-        if (previousFocus != null)
+        if (target == null)
         {
-            previousFocus.SetFocused(false);
-            currentFocus = null;
+            return false;
         }
 
-        GameEventBus.Publish(new FocusStateChangedEvent(false, previousFocus?.Owner));
-        if (interactionUI != null)
+        if (target is UnityEngine.Object unityObject)
         {
-            interactionUI.SetFocusActionsVisible(false);
+            return unityObject != null;
         }
+
+        return true;
     }
 }

@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Reflection;
 using DG.Tweening;
 using UnityEngine;
 using UnityEngine.Serialization;
@@ -8,6 +9,9 @@ using UnityEngine.Serialization;
 [DisallowMultipleComponent]
 public sealed class GameFlowController : MonoBehaviour
 {
+    private static readonly FieldInfo UsableItemEffectsField =
+        typeof(UsableItem).GetField("effects", BindingFlags.Instance | BindingFlags.NonPublic);
+
     private enum GameFlowState
     {
         NotStarted,
@@ -52,6 +56,17 @@ public sealed class GameFlowController : MonoBehaviour
         new AnimationCurve(new Keyframe(0f, 0f), new Keyframe(1f, 1f));
     [SerializeField, TextArea] private string ammoDepletedNotificationMessage = "Ammo depleted.";
     [SerializeField, TextArea] private string turnChangedNotificationMessage = "Enemy turn.";
+
+    [Header("Reveal Current Shell Flow")]
+    [SerializeField] private Vector3 revealCurrentShellCameraPosition;
+    [SerializeField] private Vector3 revealCurrentShellCameraEulerAngles;
+    [SerializeField, Min(0.01f)] private float revealCurrentShellCameraMoveDuration = 0.45f;
+    [SerializeField, Min(0.01f)] private float revealCurrentShellCameraReturnDuration = 0.45f;
+    [SerializeField, Min(0f)] private float revealCurrentShellDisplayDuration = 1.2f;
+    [SerializeField] private AnimationCurve revealCurrentShellTransitionCurve =
+        new AnimationCurve(new Keyframe(0f, 0f), new Keyframe(1f, 1f));
+    [SerializeField, TextArea] private string liveShellRevealMessage = "Current shell: Live.";
+    [SerializeField, TextArea] private string blankShellRevealMessage = "Current shell: Blank.";
 
     [Header("Open Animation")]
     [SerializeField] private Vector3 closedCoverEulerAngles = new Vector3(-90f, 0f, 0f);
@@ -153,9 +168,13 @@ public sealed class GameFlowController : MonoBehaviour
     private IDisposable reloadButtonClickedSubscription;
     private IDisposable shootPlayerButtonClickedSubscription;
     private IDisposable shootEnemyButtonClickedSubscription;
+    private IDisposable revealCurrentShellConsumedSubscription;
+    private IDisposable focusedTargetRemovedSubscription;
     private Coroutine reloadCoroutine;
     private Coroutine shootPlayerCoroutine;
     private Coroutine shootEnemyCoroutine;
+    private Coroutine revealCurrentShellCoroutine;
+    private Coroutine revealCurrentShellConsumeWaitCoroutine;
     private Sequence activeTransformTween;
     private bool shotGunDepletedAfterLastShot;
 
@@ -266,6 +285,9 @@ public sealed class GameFlowController : MonoBehaviour
         reloadButtonClickedSubscription = GameEventBus.Subscribe<ReloadButtonClickedEvent>(HandleReloadButtonClicked);
         shootPlayerButtonClickedSubscription = GameEventBus.Subscribe<ShootPlayerButtonClickedEvent>(HandleShootPlayerButtonClicked);
         shootEnemyButtonClickedSubscription = GameEventBus.Subscribe<ShootEnemyButtonClickedEvent>(HandleShootEnemyButtonClicked);
+        revealCurrentShellConsumedSubscription =
+            GameEventBus.Subscribe<RevealCurrentShotGunShellConsumedEvent>(HandleRevealCurrentShellConsumed);
+        focusedTargetRemovedSubscription = GameEventBus.Subscribe<FocusedTargetRemovedEvent>(HandleFocusedTargetRemoved);
     }
 
     private void OnDisable()
@@ -276,6 +298,10 @@ public sealed class GameFlowController : MonoBehaviour
         shootPlayerButtonClickedSubscription = null;
         shootEnemyButtonClickedSubscription?.Dispose();
         shootEnemyButtonClickedSubscription = null;
+        revealCurrentShellConsumedSubscription?.Dispose();
+        revealCurrentShellConsumedSubscription = null;
+        focusedTargetRemovedSubscription?.Dispose();
+        focusedTargetRemovedSubscription = null;
         KillOwnedTweens();
     }
 
@@ -294,6 +320,7 @@ public sealed class GameFlowController : MonoBehaviour
         reloadCoroutine = null;
         shootPlayerCoroutine = null;
         shootEnemyCoroutine = null;
+        revealCurrentShellCoroutine = null;
         KillOwnedTweens();
         GameEventBus.Publish(new GameFlowStartedEvent());
         StartCoroutine(RunGameFlow());
@@ -435,10 +462,34 @@ public sealed class GameFlowController : MonoBehaviour
         StartShootEnemyFlow();
     }
 
+    private void HandleRevealCurrentShellConsumed(RevealCurrentShotGunShellConsumedEvent evt)
+    {
+        StartRevealCurrentShellFlow();
+    }
+
+    private void HandleFocusedTargetRemoved(FocusedTargetRemovedEvent evt)
+    {
+        UsableItem usableItem = FindUsableItem(evt.FocusTarget);
+        if (usableItem == null || !HasRevealCurrentShellEffect(usableItem))
+        {
+            return;
+        }
+
+        if (revealCurrentShellConsumeWaitCoroutine != null)
+        {
+            StopCoroutine(revealCurrentShellConsumeWaitCoroutine);
+        }
+
+        revealCurrentShellConsumeWaitCoroutine = StartCoroutine(WaitForRevealCurrentShellItemConsumed(usableItem));
+    }
+
     [ContextMenu("Start Reload Flow")]
     public void StartReloadFlow()
     {
-        if (reloadCoroutine != null || shootPlayerCoroutine != null || shootEnemyCoroutine != null)
+        if (reloadCoroutine != null
+            || shootPlayerCoroutine != null
+            || shootEnemyCoroutine != null
+            || revealCurrentShellCoroutine != null)
         {
             return;
         }
@@ -449,7 +500,10 @@ public sealed class GameFlowController : MonoBehaviour
     [ContextMenu("Start Shoot Player Flow")]
     public void StartShootPlayerFlow()
     {
-        if (shootPlayerCoroutine != null || shootEnemyCoroutine != null || reloadCoroutine != null)
+        if (shootPlayerCoroutine != null
+            || shootEnemyCoroutine != null
+            || reloadCoroutine != null
+            || revealCurrentShellCoroutine != null)
         {
             return;
         }
@@ -460,12 +514,43 @@ public sealed class GameFlowController : MonoBehaviour
     [ContextMenu("Start Shoot Enemy Flow")]
     public void StartShootEnemyFlow()
     {
-        if (shootEnemyCoroutine != null || shootPlayerCoroutine != null || reloadCoroutine != null)
+        if (shootEnemyCoroutine != null || shootPlayerCoroutine != null || reloadCoroutine != null || revealCurrentShellCoroutine != null)
         {
             return;
         }
 
         shootEnemyCoroutine = StartCoroutine(RunShootEnemyFlow());
+    }
+
+    [ContextMenu("Start Reveal Current Shell Flow")]
+    public void StartRevealCurrentShellFlow()
+    {
+        if (revealCurrentShellCoroutine != null
+            || reloadCoroutine != null
+            || shootPlayerCoroutine != null
+            || shootEnemyCoroutine != null)
+        {
+            return;
+        }
+
+        revealCurrentShellCoroutine = StartCoroutine(RunRevealCurrentShellFlow());
+    }
+
+    private IEnumerator WaitForRevealCurrentShellItemConsumed(UsableItem usableItem)
+    {
+        yield return null;
+
+        DissolveAnimator itemDissolveAnimator = usableItem != null
+            ? usableItem.GetComponent<DissolveAnimator>() ?? usableItem.GetComponentInChildren<DissolveAnimator>(true)
+            : null;
+
+        while (itemDissolveAnimator != null && itemDissolveAnimator.IsPlaying)
+        {
+            yield return null;
+        }
+
+        revealCurrentShellConsumeWaitCoroutine = null;
+        StartRevealCurrentShellFlow();
     }
 
     private IEnumerator RunReloadFlow()
@@ -618,7 +703,8 @@ public sealed class GameFlowController : MonoBehaviour
             () => GameEventBus.Publish(new ShootEnemyStartedEvent()),
             () => GameEventBus.Publish(new ShootEnemyCompletedEvent()));
 
-        if (enemyActsAfterPlayerShootsEnemy && !shotGunDepletedAfterLastShot)
+        bool skipEnemyTurn = ConsumeSkipNextEnemyTurnAfterPlayerShootsEnemy();
+        if (enemyActsAfterPlayerShootsEnemy && !shotGunDepletedAfterLastShot && !skipEnemyTurn)
         {
             yield return RunNotificationFlow(
                 NotificationMessageKind.TurnChanged,
@@ -627,6 +713,12 @@ public sealed class GameFlowController : MonoBehaviour
         }
 
         shootEnemyCoroutine = null;
+    }
+
+    private static bool ConsumeSkipNextEnemyTurnAfterPlayerShootsEnemy()
+    {
+        GameGlobalManager gameGlobalManager = FindFirstObjectByType<GameGlobalManager>();
+        return gameGlobalManager != null && gameGlobalManager.ConsumeSkipNextEnemyTurnAfterPlayerShootsEnemy();
     }
 
     private IEnumerator RunEnemyTurnShotFlow()
@@ -984,6 +1076,134 @@ public sealed class GameFlowController : MonoBehaviour
 
         RestoreRegularNotification();
         GameEventBus.Publish(new NotificationFlowCompletedEvent(messageKind, message));
+    }
+
+    private IEnumerator RunRevealCurrentShellFlow()
+    {
+        if (shotGunState == null)
+        {
+            shotGunState = FindFirstObjectByType<ShotGunState>();
+        }
+
+        ShotGunShellKind shellKind = ShotGunShellKind.Blank;
+        bool hasShellKind = shotGunState != null && shotGunState.TryPeekNextShell(out shellKind);
+        string message = hasShellKind ? GetRevealCurrentShellMessage(shellKind) : string.Empty;
+        Transform cameraTransform = GetCameraTransform();
+        if (cameraTransform == null)
+        {
+            Debug.LogWarning(
+                "Cannot move camera for reveal current shell flow because the camera transform is missing.",
+                this);
+            GameEventBus.Publish(new RevealCurrentShotGunShellRequestedEvent());
+            if (!string.IsNullOrWhiteSpace(message))
+            {
+                DisplayNotification(message);
+            }
+
+            if (revealCurrentShellDisplayDuration > 0f)
+            {
+                yield return new WaitForSeconds(revealCurrentShellDisplayDuration);
+            }
+
+            RestoreRegularNotification();
+            revealCurrentShellCoroutine = null;
+            yield break;
+        }
+
+        SetPlayerInputLocked(true);
+        if (interactionUI != null)
+        {
+            interactionUI.SetFocusActionsVisible(false);
+        }
+
+        if (cameraLook != null)
+        {
+            cameraLook.SetExternalControl(true);
+        }
+
+        yield return TweenTransform(
+            cameraTransform,
+            revealCurrentShellCameraPosition,
+            Quaternion.Euler(revealCurrentShellCameraEulerAngles),
+            cameraTransform.localScale,
+            revealCurrentShellCameraMoveDuration,
+            false,
+            revealCurrentShellTransitionCurve);
+
+        GameEventBus.Publish(new RevealCurrentShotGunShellRequestedEvent());
+        if (!string.IsNullOrWhiteSpace(message))
+        {
+            DisplayNotification(message);
+        }
+
+        if (revealCurrentShellDisplayDuration > 0f)
+        {
+            yield return new WaitForSeconds(revealCurrentShellDisplayDuration);
+        }
+
+        RestoreRegularNotification();
+
+        yield return TweenTransform(
+            cameraTransform,
+            initialCameraPosition,
+            initialCameraRotation,
+            cameraTransform.localScale,
+            revealCurrentShellCameraReturnDuration,
+            false,
+            revealCurrentShellTransitionCurve);
+
+        if (cameraLook != null)
+        {
+            cameraLook.ResetLookToStartingRotation();
+            cameraLook.SetExternalControl(false);
+        }
+
+        SetPlayerInputLocked(false);
+        revealCurrentShellCoroutine = null;
+    }
+
+    private string GetRevealCurrentShellMessage(ShotGunShellKind shellKind)
+    {
+        switch (shellKind)
+        {
+            case ShotGunShellKind.Live:
+                return liveShellRevealMessage;
+            case ShotGunShellKind.Blank:
+                return blankShellRevealMessage;
+            default:
+                return string.Empty;
+        }
+    }
+
+    private static UsableItem FindUsableItem(UnityEngine.Object focusTarget)
+    {
+        if (focusTarget is UsableItem usableItem)
+        {
+            return usableItem;
+        }
+
+        if (focusTarget is Component component)
+        {
+            return component.GetComponent<UsableItem>() ?? component.GetComponentInParent<UsableItem>();
+        }
+
+        if (focusTarget is GameObject gameObject)
+        {
+            return gameObject.GetComponent<UsableItem>() ?? gameObject.GetComponentInParent<UsableItem>();
+        }
+
+        return null;
+    }
+
+    private static bool HasRevealCurrentShellEffect(UsableItem usableItem)
+    {
+        if (usableItem == null || UsableItemEffectsField == null)
+        {
+            return false;
+        }
+
+        UsableItem.ItemEffect effects = (UsableItem.ItemEffect)UsableItemEffectsField.GetValue(usableItem);
+        return (effects & UsableItem.ItemEffect.RevealCurrentShotGunShell) != 0;
     }
 
     private void DisplayNotification(string message)

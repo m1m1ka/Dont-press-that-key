@@ -17,6 +17,9 @@ public sealed class GameGlobalManager : MonoBehaviour
     private IDisposable shotGunHitResolvedSubscription;
     private int playerCurrentHealth;
     private int enemyCurrentHealth;
+    private int pendingNextShotDamageBonus;
+    private int pendingPlayerShotDamageBonus;
+    private bool skipNextEnemyTurnAfterPlayerShootsEnemy;
 
     public int PlayerCurrentHealth => playerCurrentHealth;
     public int PlayerMaxHealth => playerMaxHealth;
@@ -24,6 +27,9 @@ public sealed class GameGlobalManager : MonoBehaviour
     public int EnemyMaxHealth => enemyMaxHealth;
     public int CurrentLevel => currentLevel;
     public int CompletedLevelCount => completedLevelCount;
+    public int PendingNextShotDamageBonus => pendingNextShotDamageBonus;
+    public int PendingPlayerShotDamageBonus => pendingPlayerShotDamageBonus;
+    public bool SkipNextEnemyTurnAfterPlayerShootsEnemyPending => skipNextEnemyTurnAfterPlayerShootsEnemy;
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
     private static void EnsureExists()
@@ -90,6 +96,42 @@ public sealed class GameGlobalManager : MonoBehaviour
         SetCharacterHealth(GameCharacter.Enemy, enemyMaxHealth);
     }
 
+    public void AddPlayerNextShotDamageBonus(int bonusDamage)
+    {
+        if (bonusDamage <= 0)
+        {
+            return;
+        }
+
+        pendingPlayerShotDamageBonus += bonusDamage;
+    }
+
+    public void AddNextShotDamageBonus(int bonusDamage)
+    {
+        if (bonusDamage <= 0)
+        {
+            return;
+        }
+
+        pendingNextShotDamageBonus += bonusDamage;
+    }
+
+    public void SkipNextEnemyTurnAfterPlayerShootsEnemy()
+    {
+        skipNextEnemyTurnAfterPlayerShootsEnemy = true;
+    }
+
+    public bool ConsumeSkipNextEnemyTurnAfterPlayerShootsEnemy()
+    {
+        if (!skipNextEnemyTurnAfterPlayerShootsEnemy)
+        {
+            return false;
+        }
+
+        skipNextEnemyTurnAfterPlayerShootsEnemy = false;
+        return true;
+    }
+
     public void SetCurrentLevel(int level)
     {
         currentLevel = Mathf.Max(1, level);
@@ -105,7 +147,26 @@ public sealed class GameGlobalManager : MonoBehaviour
 
     private void HandleShotGunHitResolved(ShotGunHitResolvedEvent evt)
     {
-        DamageCharacter(evt.Target, evt.Damage);
+        int damage = evt.Damage;
+        if (damage > 0 && pendingNextShotDamageBonus > 0)
+        {
+            damage += pendingNextShotDamageBonus;
+            pendingNextShotDamageBonus = 0;
+        }
+
+        if (damage > 0 && IsPlayerShot(evt.FireContext) && pendingPlayerShotDamageBonus > 0)
+        {
+            damage += pendingPlayerShotDamageBonus;
+            pendingPlayerShotDamageBonus = 0;
+        }
+
+        DamageCharacter(evt.Target, damage);
+    }
+
+    private static bool IsPlayerShot(ShotGunFireEffectContext fireContext)
+    {
+        return fireContext == ShotGunFireEffectContext.PlayerShootsPlayer
+            || fireContext == ShotGunFireEffectContext.PlayerShootsEnemy;
     }
 
     private void SetCharacterHealth(GameCharacter character, int health)

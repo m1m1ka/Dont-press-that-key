@@ -1,4 +1,5 @@
 using UnityEngine;
+using System.Collections.Generic;
 
 public struct GameFlowStartedEvent
 {
@@ -82,6 +83,18 @@ public struct ReloadCompletedEvent
 {
 }
 
+public struct ShotGunShellsLoadedEvent
+{
+    public ShotGunShellsLoadedEvent(ShotGunState shotGunState, IReadOnlyList<ShotGunShellKind> shellKinds)
+    {
+        ShotGunState = shotGunState;
+        ShellKinds = shellKinds;
+    }
+
+    public ShotGunState ShotGunState { get; }
+    public IReadOnlyList<ShotGunShellKind> ShellKinds { get; }
+}
+
 public struct ReloadButtonClickedEvent
 {
 }
@@ -92,6 +105,42 @@ public struct ShootPlayerButtonClickedEvent
 
 public struct ShootEnemyButtonClickedEvent
 {
+}
+
+public struct UseFocusedItemButtonClickedEvent
+{
+}
+
+public struct RevealCurrentShotGunShellRequestedEvent
+{
+}
+
+public struct RevealCurrentShotGunShellConsumedEvent
+{
+    public RevealCurrentShotGunShellConsumedEvent(UnityEngine.Object source)
+    {
+        Source = source;
+    }
+
+    public UnityEngine.Object Source { get; }
+}
+
+public struct SwapCurrentAndNextShotGunShellRequestedEvent
+{
+}
+
+public struct InvertCurrentShotGunShellRequestedEvent
+{
+}
+
+public struct FocusedTargetRemovedEvent
+{
+    public FocusedTargetRemovedEvent(UnityEngine.Object focusTarget)
+    {
+        FocusTarget = focusTarget;
+    }
+
+    public UnityEngine.Object FocusTarget { get; }
 }
 
 public struct ShootPlayerStartedEvent

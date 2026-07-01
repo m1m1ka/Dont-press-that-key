@@ -1,5 +1,18 @@
 # AI Coding Guidelines
 
+## Game Rules
+
+The game is a two-sided shotgun duel between the player and an enemy.
+
+- The player and the enemy share one shotgun loaded with a mix of live shells and blank shells.
+- Both sides have their own health value.
+- A side dies when its health reaches zero.
+- On a turn, the current actor may shoot either themselves or the opponent.
+- If the current actor shoots themselves, the next turn still belongs to the same actor.
+- If the current actor shoots the opponent, the next turn switches to the other actor.
+- Live shells should damage the shot target. Blank shells should not damage the shot target.
+- Keep these turn rules consistent for both player and enemy actions.
+
 ## Animation Rule
 
 All gameplay movement, rotation, and scale animations must use DOTween.

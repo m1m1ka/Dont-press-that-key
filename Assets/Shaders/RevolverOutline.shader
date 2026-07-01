@@ -12,8 +12,8 @@ Shader "Custom/URP/Revolver Outline"
         Tags
         {
             "RenderPipeline" = "UniversalPipeline"
-            "RenderType" = "Opaque"
-            "Queue" = "Geometry+10"
+            "RenderType" = "Transparent"
+            "Queue" = "Transparent+100"
         }
 
         Pass

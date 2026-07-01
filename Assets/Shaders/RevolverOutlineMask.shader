@@ -5,8 +5,8 @@ Shader "Hidden/URP/Revolver Outline Mask"
         Tags
         {
             "RenderPipeline" = "UniversalPipeline"
-            "RenderType" = "Opaque"
-            "Queue" = "Geometry+9"
+            "RenderType" = "Transparent"
+            "Queue" = "Transparent+99"
         }
 
         Pass

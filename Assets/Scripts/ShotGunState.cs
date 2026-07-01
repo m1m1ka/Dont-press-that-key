@@ -10,17 +10,24 @@ public sealed class ShotGunState : MonoBehaviour
     [SerializeField, Min(0)] private int loadedBlankShellCount;
 
     private IDisposable gameFlowStartedSubscription;
+    private IDisposable swapCurrentAndNextShellSubscription;
+    private IDisposable invertCurrentShellSubscription;
     private readonly List<ShotGunShellKind> loadedShells = new List<ShotGunShellKind>();
     private int nextShellIndex;
 
     public bool IsLoaded => isLoaded;
     public int LoadedLiveShellCount => loadedLiveShellCount;
     public int LoadedBlankShellCount => loadedBlankShellCount;
+    public int LoadedShellCount => loadedShells.Count;
     public int RemainingShellCount => Mathf.Max(0, loadedShells.Count - nextShellIndex);
 
     private void OnEnable()
     {
         gameFlowStartedSubscription = GameEventBus.Subscribe<GameFlowStartedEvent>(HandleGameFlowStarted);
+        swapCurrentAndNextShellSubscription =
+            GameEventBus.Subscribe<SwapCurrentAndNextShotGunShellRequestedEvent>(HandleSwapCurrentAndNextShellRequested);
+        invertCurrentShellSubscription =
+            GameEventBus.Subscribe<InvertCurrentShotGunShellRequestedEvent>(HandleInvertCurrentShellRequested);
         PublishLoadedState();
     }
 
@@ -28,6 +35,10 @@ public sealed class ShotGunState : MonoBehaviour
     {
         gameFlowStartedSubscription?.Dispose();
         gameFlowStartedSubscription = null;
+        swapCurrentAndNextShellSubscription?.Dispose();
+        swapCurrentAndNextShellSubscription = null;
+        invertCurrentShellSubscription?.Dispose();
+        invertCurrentShellSubscription = null;
     }
 
     public void SetLoaded(bool loaded)
@@ -50,6 +61,7 @@ public sealed class ShotGunState : MonoBehaviour
         loadedBlankShellCount = 0;
         nextShellIndex = 0;
         SetLoaded(true);
+        GameEventBus.Publish(new ShotGunShellsLoadedEvent(this, new List<ShotGunShellKind>(loadedShells)));
     }
 
     public void ClearLoaded()
@@ -77,16 +89,75 @@ public sealed class ShotGunState : MonoBehaviour
         }
 
         SetLoaded(loadedShells.Count > 0);
+        GameEventBus.Publish(new ShotGunShellsLoadedEvent(this, new List<ShotGunShellKind>(loadedShells)));
     }
 
     public ShotGunShellKind ConsumeNextShell()
     {
+        return ConsumeNextShell(out _, out _);
+    }
+
+    public bool TryPeekNextShell(out ShotGunShellKind shellKind)
+    {
+        if (nextShellIndex < 0 || nextShellIndex >= loadedShells.Count)
+        {
+            shellKind = ShotGunShellKind.Blank;
+            return false;
+        }
+
+        shellKind = loadedShells[nextShellIndex];
+        return true;
+    }
+
+    public bool TrySwapCurrentAndNextShell()
+    {
+        int nextIndex = nextShellIndex + 1;
+        if (nextShellIndex < 0 || nextIndex >= loadedShells.Count)
+        {
+            return false;
+        }
+
+        ShotGunShellKind currentShellKind = loadedShells[nextShellIndex];
+        loadedShells[nextShellIndex] = loadedShells[nextIndex];
+        loadedShells[nextIndex] = currentShellKind;
+        PublishShellsLoaded();
+        return true;
+    }
+
+    public bool TryInvertCurrentShell()
+    {
+        if (nextShellIndex < 0 || nextShellIndex >= loadedShells.Count)
+        {
+            return false;
+        }
+
+        ShotGunShellKind previousShellKind = loadedShells[nextShellIndex];
+        ShotGunShellKind nextShellKind = InvertShellKind(previousShellKind);
+        if (previousShellKind == nextShellKind)
+        {
+            return false;
+        }
+
+        loadedShells[nextShellIndex] = nextShellKind;
+        DecrementLoadedShellCount(previousShellKind);
+        AddLoadedShellCount(nextShellKind);
+        PublishLoadedState();
+        PublishShellsLoaded();
+        return true;
+    }
+
+    public ShotGunShellKind ConsumeNextShell(out int shellIndex, out int shellCount)
+    {
         if (nextShellIndex >= loadedShells.Count)
         {
+            shellIndex = -1;
+            shellCount = loadedShells.Count;
             SetLoaded(false);
             return ShotGunShellKind.Blank;
         }
 
+        shellIndex = nextShellIndex;
+        shellCount = loadedShells.Count;
         ShotGunShellKind shellKind = loadedShells[nextShellIndex];
         nextShellIndex++;
         DecrementLoadedShellCount(shellKind);
@@ -102,6 +173,11 @@ public sealed class ShotGunState : MonoBehaviour
     private void AddLoadedShell(ShotGunShellKind shellKind)
     {
         loadedShells.Add(shellKind);
+        AddLoadedShellCount(shellKind);
+    }
+
+    private void AddLoadedShellCount(ShotGunShellKind shellKind)
+    {
         switch (shellKind)
         {
             case ShotGunShellKind.Live:
@@ -138,5 +214,33 @@ public sealed class ShotGunState : MonoBehaviour
             isLoaded,
             loadedLiveShellCount,
             loadedBlankShellCount));
+    }
+
+    private void HandleSwapCurrentAndNextShellRequested(SwapCurrentAndNextShotGunShellRequestedEvent evt)
+    {
+        TrySwapCurrentAndNextShell();
+    }
+
+    private void HandleInvertCurrentShellRequested(InvertCurrentShotGunShellRequestedEvent evt)
+    {
+        TryInvertCurrentShell();
+    }
+
+    private void PublishShellsLoaded()
+    {
+        GameEventBus.Publish(new ShotGunShellsLoadedEvent(this, new List<ShotGunShellKind>(loadedShells)));
+    }
+
+    private static ShotGunShellKind InvertShellKind(ShotGunShellKind shellKind)
+    {
+        switch (shellKind)
+        {
+            case ShotGunShellKind.Live:
+                return ShotGunShellKind.Blank;
+            case ShotGunShellKind.Blank:
+                return ShotGunShellKind.Live;
+            default:
+                return shellKind;
+        }
     }
 }

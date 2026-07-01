@@ -21,6 +21,7 @@ public sealed class BulletSpawner : MonoBehaviour
     public IReadOnlyList<GameObject> SpawnedBullets => spawnedBullets;
     public IReadOnlyList<ShotGunShellKind> SpawnedShellKinds => spawnedShellKinds;
     public int SpawnedBulletCount => spawnedBullets.Count;
+    public int SpawnedShellCount => spawnedShellKinds.Count;
     public int SpawnedLiveShellCount => spawnedLiveShellCount;
     public int SpawnedBlankShellCount => spawnedBlankShellCount;
 
@@ -80,6 +81,15 @@ public sealed class BulletSpawner : MonoBehaviour
     [ContextMenu("Clear Spawned Bullets")]
     public void ClearSpawnedBullets()
     {
+        DestroySpawnedBulletEntities();
+        spawnedShellKinds.Clear();
+        spawnedLiveShellCount = 0;
+        spawnedBlankShellCount = 0;
+    }
+
+    [ContextMenu("Destroy Spawned Bullet Entities")]
+    public void DestroySpawnedBulletEntities()
+    {
         for (int i = spawnedBullets.Count - 1; i >= 0; i--)
         {
             GameObject bullet = spawnedBullets[i];
@@ -99,9 +109,6 @@ public sealed class BulletSpawner : MonoBehaviour
         }
 
         spawnedBullets.Clear();
-        spawnedShellKinds.Clear();
-        spawnedLiveShellCount = 0;
-        spawnedBlankShellCount = 0;
     }
 
     private void AddSpawnedShellCount(ShotGunShellKind shellKind)
